@@ -7,14 +7,13 @@ option(BRIDGE_ENABLE_COVERAGE "Enable host test coverage instrumentation" OFF)
 enable_testing()
 
 add_executable(bridge_ring_test
-    core/bridge_ring_test.c
-    ../src/core/bridge_ring.c
+    bridge_ring_test.c
+    ../src/bridge_ring.c
 )
 
 target_include_directories(bridge_ring_test
     PRIVATE
-        ../src/config
-        ../src/core
+        ../src
 )
 
 if (BRIDGE_ENABLE_COVERAGE)

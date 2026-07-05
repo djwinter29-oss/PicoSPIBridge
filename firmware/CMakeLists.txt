@@ -10,11 +10,11 @@ set(CMAKE_CXX_STANDARD 17)
 pico_sdk_init()
 
 add_executable(pico_spi_bridge
-    src/app/main.c
-    src/core/bridge_ring.c
+    src/main.c
+    src/bridge_ring.c
     src/capture/spi_capture.c
     src/capture/spi_mosi_sniffer.pio
-    src/transport/usb_stream.c
+    src/usb_stream.c
 )
 
 pico_generate_pio_header(
@@ -24,10 +24,8 @@ pico_generate_pio_header(
 
 target_include_directories(pico_spi_bridge
     PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}/src/config
-        ${CMAKE_CURRENT_LIST_DIR}/src/core
+    ${CMAKE_CURRENT_LIST_DIR}/src
         ${CMAKE_CURRENT_LIST_DIR}/src/capture
-        ${CMAKE_CURRENT_LIST_DIR}/src/transport
 )
 
 target_link_libraries(pico_spi_bridge

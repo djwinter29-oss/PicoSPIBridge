@@ -126,6 +126,24 @@ Helper scripts are provided under `tools/` for both Windows and Linux:
 
 Coverage scripts require `gcovr` and a GCC- or Clang-based host compiler.
 
+## Project Structure
+
+The repository is intentionally kept small:
+
+- `firmware/` contains the RP2040 firmware project and its Pico SDK build files
+- `firmware/src/` contains the main firmware sources
+- `firmware/src/capture/` contains the SPI capture implementation, including the PIO program and DMA-driven capture logic
+- `firmware/tests/` contains host-side unit tests for logic that can be validated without RP2040 hardware
+- `tools/` contains helper scripts for build, test, and coverage on Windows and Linux
+- `docs/` contains supporting documentation such as pin assignments
+
+Within `firmware/src/`, the structure is intentionally light:
+
+- `main.c` handles firmware startup and the main loop
+- `bridge_ring.*` provides the ring buffer used between capture and USB streaming
+- `usb_stream.*` handles forwarding buffered bytes to USB CDC
+- `bridge_config.h` keeps shared firmware constants in one place
+
 ## Wiring
 
 - Connect target SPI `SCK` to RP2040 `GPIO2`
