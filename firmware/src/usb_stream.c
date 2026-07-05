@@ -102,7 +102,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
 }
 
 void tud_cdc_rx_cb(uint8_t itf) {
-    uint8_t sink[BRIDGE_USB_CHUNK_SIZE];
+    uint8_t sink[BRIDGE_USB_PACKET_SIZE];
 
     while (tud_cdc_n_available(itf) != 0u) {
         (void)tud_cdc_n_read(itf, sink, sizeof(sink));
