@@ -18,6 +18,9 @@ typedef struct {
 } dma_channel_config;
 
 extern mock_dma_hw_t *dma_hw;
+extern unsigned int mock_dma_next_channel;
+extern volatile void *mock_dma_write_addresses[16];
+extern uint32_t mock_dma_configure_transfer_counts[16];
 
 #define DMA_SIZE_8 0u
 
@@ -54,15 +57,16 @@ static inline void channel_config_set_chain_to(dma_channel_config *config, unsig
 static inline void dma_channel_configure(unsigned int channel, const dma_channel_config *config, volatile void *write_addr, const volatile void *read_addr, uint32_t transfer_count, bool trigger) {
     (void)channel;
     (void)config;
-    (void)write_addr;
+    mock_dma_write_addresses[channel] = write_addr;
     (void)read_addr;
-    (void)transfer_count;
+    mock_dma_configure_transfer_counts[channel] = transfer_count;
+    dma_hw->ch[channel].transfer_count = transfer_count;
     (void)trigger;
 }
 
 static inline unsigned int dma_claim_unused_channel(bool required) {
     (void)required;
-    return 0u;
+    return mock_dma_next_channel++;
 }
 
 static inline void dma_channel_set_irq0_enabled(unsigned int channel, bool enabled) {

@@ -71,14 +71,6 @@ static void test_completion_ready_bytes_returns_unflushed_tail_only(void) {
     assert(capture_completion_ready_bytes(64u, 80u) == 0u);
 }
 
-static void test_publish_failure_resyncs_ring_reservation_state(void) {
-    uint32_t reserved_write_index = 123u;
-
-    capture_note_publish_failure(&reserved_write_index, 77u);
-
-    assert(reserved_write_index == 77u);
-}
-
 int main(void) {
     test_full_block_reservation();
     test_wrap_limited_reservation();
@@ -89,6 +81,5 @@ int main(void) {
     test_poll_ready_bytes_returns_only_incremental_delta();
     test_poll_ready_bytes_rejects_empty_or_fully_flushed_state();
     test_completion_ready_bytes_returns_unflushed_tail_only();
-    test_publish_failure_resyncs_ring_reservation_state();
     return 0;
 }

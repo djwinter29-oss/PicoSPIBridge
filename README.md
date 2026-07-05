@@ -113,14 +113,14 @@ The repository includes host-side unit tests for the ring buffer, DMA span plann
 	ctest --test-dir build/tests -C Debug --output-on-failure
 	```
 
-On Windows, `tools/windows/test.ps1` is the simplest way to run validation because it bootstraps the Visual Studio developer environment, builds the Pico firmware, and then runs the host tests.
+On Windows, `tools/windows/test.ps1` is the simplest way to run validation because it bootstraps the Visual Studio developer environment, builds the Pico firmware, and then runs the host tests. If you only want the host-side tests on a machine without the Pico SDK, pass `-SkipFirmwareBuild`.
 
 ## Tool Scripts
 
 Helper scripts are provided under `tools/` for both Windows and Linux:
 
 - `tools/windows/build.ps1` configures and builds firmware plus host tests
-- `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest`
+- `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest` by default; pass `-SkipFirmwareBuild` for host-only validation
 - `tools/windows/coverage.ps1` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 - `tools/linux/build.sh` configures and builds firmware plus host tests
 - `tools/linux/test.sh` builds the firmware, rebuilds the host tests, and runs `ctest`

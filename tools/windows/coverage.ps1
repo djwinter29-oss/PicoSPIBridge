@@ -5,6 +5,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeCommand {
+    param(
+        [string]$Description,
+        [scriptblock]$Command
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE."
+    }
+}
+
 . (Join-Path $PSScriptRoot "Import-VsDevEnvironment.ps1")
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
@@ -36,13 +48,16 @@ try {
         throw "gcovr is required for coverage reporting. Install it with 'pip install gcovr'."
     }
 
-    cmake -G Ninja -S firmware/tests -B $CoverageBuildDir -DBRIDGE_ENABLE_COVERAGE=ON -DCMAKE_C_COMPILER=$coverageCompiler.Source
-    cmake --build $CoverageBuildDir --config Debug
-    ctest --test-dir $CoverageBuildDir -C Debug --output-on-failure
+    Invoke-NativeCommand "Coverage configure" { cmake -G Ninja -S firmware/tests -B $CoverageBuildDir -DBRIDGE_ENABLE_COVERAGE=ON -DCMAKE_C_COMPILER=$coverageCompiler.Source }
+    Invoke-NativeCommand "Coverage build" { cmake --build $CoverageBuildDir --config Debug }
+    Invoke-NativeCommand "Coverage test run" { ctest --test-dir $CoverageBuildDir -C Debug --output-on-failure }
 
     New-Item -ItemType Directory -Force -Path $CoverageOutputDir | Out-Null
 
     & gcovr @gcovrArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Coverage report generation failed with exit code $LASTEXITCODE."
+    }
 }
 finally {
     Pop-Location

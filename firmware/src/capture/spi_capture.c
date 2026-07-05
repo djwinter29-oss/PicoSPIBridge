@@ -20,6 +20,7 @@ typedef struct {
     uint32_t transfer_count;
     bool drop_on_commit;
     bool overflow_counted;
+    bool ring_reserved;
 } spi_capture_dma_target_t;
 
 typedef struct {
@@ -28,6 +29,8 @@ typedef struct {
     uint dma_channels[2];
     bridge_ring_t *ring;
     spi_capture_shared_state_t shared;
+    bool recovery_active;
+    bool recovery_resume_pending;
     uint32_t reserved_write_index;
     spi_capture_dma_target_t dma_targets[2];
     uint8_t overflow_blocks[2][BRIDGE_DMA_BLOCK_SIZE];
@@ -43,7 +46,33 @@ typedef struct {
     uint32_t remaining_count;
 } spi_capture_snapshot_t;
 
+static bool spi_capture_recovery_can_resume(void) {
+    return !capture.dma_targets[0].ring_reserved && !capture.dma_targets[1].ring_reserved;
+}
+
+static void spi_capture_retire_dma_target(uint block_index) {
+    if (!capture.dma_targets[block_index].ring_reserved) {
+        return;
+    }
+
+    capture.dma_targets[block_index].ring_reserved = false;
+
+    if (capture.recovery_active && spi_capture_recovery_can_resume()) {
+        capture.reserved_write_index = capture.ring->write_index;
+        capture.recovery_resume_pending = true;
+    }
+}
+
 static void spi_capture_assign_dma_target(uint block_index) {
+
+    if (capture.recovery_active) {
+        capture.dma_targets[block_index].destination = capture.overflow_blocks[block_index];
+        capture.dma_targets[block_index].transfer_count = BRIDGE_DMA_BLOCK_SIZE;
+        capture.dma_targets[block_index].drop_on_commit = true;
+        capture.dma_targets[block_index].overflow_counted = false;
+        capture.dma_targets[block_index].ring_reserved = false;
+        return;
+    }
 
     capture_dma_plan_t plan = capture_dma_plan_target(capture.reserved_write_index, capture.ring->read_index);
 
@@ -52,6 +81,7 @@ static void spi_capture_assign_dma_target(uint block_index) {
         capture.dma_targets[block_index].transfer_count = plan.transfer_count;
         capture.dma_targets[block_index].drop_on_commit = true;
         capture.dma_targets[block_index].overflow_counted = false;
+        capture.dma_targets[block_index].ring_reserved = false;
         return;
     }
 
@@ -59,6 +89,7 @@ static void spi_capture_assign_dma_target(uint block_index) {
     capture.dma_targets[block_index].transfer_count = plan.transfer_count;
     capture.dma_targets[block_index].drop_on_commit = false;
     capture.dma_targets[block_index].overflow_counted = false;
+    capture.dma_targets[block_index].ring_reserved = true;
     capture.reserved_write_index = plan.next_reserved_write_index;
 }
 
@@ -97,7 +128,7 @@ static void spi_capture_publish_bytes_from_block(uint block_index, uint32_t coun
     }
 
     if (!bridge_ring_publish(capture.ring, count)) {
-        capture_note_publish_failure(&capture.reserved_write_index, capture.ring->write_index);
+        capture.recovery_active = true;
     }
 }
 
@@ -150,9 +181,14 @@ static void spi_capture_dma_irq_handler(void) {
             spi_capture_publish_bytes_from_block(block_index, (uint32_t)ready_count);
         }
 
+        spi_capture_retire_dma_target(block_index);
         capture.shared.flushed_counts[block_index] = 0u;
         capture.shared.active_block_index = block_index ^ 1u;
         spi_capture_configure_dma_channel(block_index, false);
+        if (capture.recovery_resume_pending) {
+            capture.recovery_active = false;
+            capture.recovery_resume_pending = false;
+        }
         capture.ring->stats.dma_rearm_count += 1u;
     }
 }
@@ -163,6 +199,8 @@ void spi_capture_init(const spi_capture_config_t *config) {
     capture.ring = config->ring;
     capture.pio = pio0;
     capture.sm = (uint)pio_claim_unused_sm(capture.pio, true);
+    capture.recovery_active = false;
+    capture.recovery_resume_pending = false;
     capture.reserved_write_index = capture.ring->write_index;
 
     pio_gpio_init(capture.pio, PICO_SPI_BRIDGE_SCK_PIN);
