@@ -35,8 +35,29 @@ int main(void) {
     mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = true;
     bridge_ring_init(&ring);
     spi_capture_init(&(spi_capture_config_t){.ring = &ring});
+    assert(mock_dma_irq0_handler != 0);
     assert(mock_spi_mosi_sniffer_init_calls == 1u);
     assert(mock_spi_mosi_sniffer_recovery_init_calls == 1u);
+
+    mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = false;
+    dma_hw->ints0 = 1u << 0;
+    dma_hw->ch[0].transfer_count = 0u;
+    mock_dma_irq0_handler();
+
+    assert(ring.usb_flush_pending_count == 0u);
+
+    mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = true;
+    spi_capture_poll();
+
+    assert(ring.usb_flush_pending_count == 1u);
+    assert(ring.usb_flush_pending_bytes[0] == BRIDGE_DMA_BLOCK_SIZE);
+
+    ring.usb_flush_pending_count = 0u;
+    ring.usb_flush_pending_bytes[0] = 0u;
+    spi_capture_poll();
+
+    assert(ring.usb_flush_pending_count == 0u);
+
     spi_capture_poll();
     return 0;
 }

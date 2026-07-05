@@ -36,6 +36,7 @@ typedef struct {
     volatile bool recovery_quiescing;
     volatile bool recovery_resume_pending;
     volatile bool recovery_boundary_seen;
+    volatile bool transaction_boundary_noted;
     uint32_t reserved_write_index;
     spi_capture_dma_target_t dma_targets[2];
     uint8_t overflow_blocks[2][BRIDGE_DMA_BLOCK_SIZE];
@@ -261,6 +262,7 @@ static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapsh
     *irq_state = save_and_disable_interrupts();
 
     if (!gpio_get(PICO_SPI_BRIDGE_CS_PIN)) {
+        capture.transaction_boundary_noted = false;
         restore_interrupts(*irq_state);
         return false;
     }
@@ -275,11 +277,6 @@ static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapsh
     snapshot->transfer_count = capture.dma_targets[snapshot->block_index].transfer_count;
     snapshot->flushed_count = capture.shared.flushed_counts[snapshot->block_index];
     snapshot->remaining_count = dma_hw->ch[snapshot->dma_channel].transfer_count;
-
-    if (!capture_poll_ready_bytes(snapshot->transfer_count, snapshot->flushed_count, snapshot->remaining_count, NULL)) {
-        restore_interrupts(*irq_state);
-        return false;
-    }
 
     return true;
 }
@@ -331,6 +328,7 @@ void spi_capture_init(const spi_capture_config_t *config) {
     capture.recovery_quiescing = false;
     capture.recovery_resume_pending = false;
     capture.recovery_boundary_seen = false;
+    capture.transaction_boundary_noted = false;
     capture.reserved_write_index = capture.ring->write_index;
 
     pio_gpio_init(capture.pio, PICO_SPI_BRIDGE_SCK_PIN);
@@ -363,9 +361,9 @@ void spi_capture_init(const spi_capture_config_t *config) {
     irq_set_exclusive_handler(DMA_IRQ_0, spi_capture_dma_irq_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 
-    // ponytail: Two chained 2 KB DMA buffers trade more IRQ churn for less wrap waste and smaller drop granularity near saturation.
+    // ponytail: Two chained 1 KB DMA buffers trade more IRQ churn for less wrap waste and smaller drop granularity near saturation.
     // The ceiling is extra DMA recycle overhead if the IRQ path becomes the bottleneck.
-    // That is acceptable here because the observed failures are block-sized drops near the throughput edge; move to a different transport only if 2 KB blocks still do not hold the line.
+    // That is acceptable here because the observed failures are block-sized drops near the throughput edge; move to a different transport only if 1 KB blocks still do not hold the line.
     capture.shared.active_block_index = 0u;
     capture.shared.flushed_counts[0] = 0u;
     capture.shared.flushed_counts[1] = 0u;
@@ -377,6 +375,7 @@ void spi_capture_poll(void) {
     spi_capture_snapshot_t snapshot;
     uint32_t captured;
     uint32_t ready_count;
+    bool has_ready_bytes;
     bool published;
 
     spi_capture_try_finish_recovery();
@@ -385,7 +384,17 @@ void spi_capture_poll(void) {
         return;
     }
 
-    if (!capture_poll_ready_bytes(snapshot.transfer_count, snapshot.flushed_count, snapshot.remaining_count, &ready_count)) {
+    has_ready_bytes = capture_poll_ready_bytes(
+        snapshot.transfer_count,
+        snapshot.flushed_count,
+        snapshot.remaining_count,
+        &ready_count
+    );
+    if (!has_ready_bytes) {
+        if (!capture.recovery_active && !capture.transaction_boundary_noted) {
+            bridge_ring_note_usb_flush_boundary(capture.ring);
+            capture.transaction_boundary_noted = true;
+        }
         restore_interrupts(irq_state);
         return;
     }
@@ -398,6 +407,7 @@ void spi_capture_poll(void) {
     published = spi_capture_publish_bytes_from_block(snapshot.block_index, ready_count);
     if (published) {
         bridge_ring_note_usb_flush_boundary(capture.ring);
+        capture.transaction_boundary_noted = true;
         capture.shared.flushed_counts[snapshot.block_index] = captured;
     } else if (!capture.recovery_active && capture.dma_targets[snapshot.block_index].drop_on_commit) {
         capture.shared.flushed_counts[snapshot.block_index] = captured;

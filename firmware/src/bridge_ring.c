@@ -131,13 +131,12 @@ void bridge_ring_consume(bridge_ring_t *ring, size_t count) {
 }
 
 void bridge_ring_note_usb_flush_boundary(bridge_ring_t *ring) {
+    uint32_t coalesced_bytes;
+    uint32_t deferred_coalesced_bytes;
+    uint32_t pending_count;
     size_t used;
 
     if (ring == NULL) {
-        return;
-    }
-
-    if (ring->usb_flush_pending_bytes != 0u) {
         return;
     }
 
@@ -146,26 +145,118 @@ void bridge_ring_note_usb_flush_boundary(bridge_ring_t *ring) {
         return;
     }
 
-    ring->usb_flush_pending_bytes = (uint32_t)used;
+    pending_count = ring->usb_flush_pending_count;
+    if (pending_count != 0u) {
+        uint32_t last_pending = ring->usb_flush_pending_bytes[pending_count - 1u];
+
+        if ((uint32_t)used <= last_pending) {
+            return;
+        }
+    }
+
+    coalesced_bytes = ring->usb_flush_coalesced_bytes;
+    if ((coalesced_bytes != 0u) && ((uint32_t)used <= coalesced_bytes)) {
+        return;
+    }
+
+    deferred_coalesced_bytes = ring->usb_flush_deferred_coalesced_bytes;
+    if ((deferred_coalesced_bytes != 0u) && ((uint32_t)used <= deferred_coalesced_bytes)) {
+        return;
+    }
+
+    if (pending_count >= BRIDGE_USB_FLUSH_BOUNDARY_SLOTS) {
+        if (coalesced_bytes == 0u) {
+            ring->usb_flush_coalesced_bytes = (uint32_t)used;
+        } else if (deferred_coalesced_bytes == 0u) {
+            ring->usb_flush_deferred_coalesced_bytes = (uint32_t)used;
+        } else {
+            ring->usb_flush_force_on_write = true;
+        }
+        ring->stats.usb_flush_boundary_overflows += 1u;
+        return;
+    }
+
+    ring->usb_flush_pending_bytes[pending_count] = (uint32_t)used;
+    ring->usb_flush_pending_count = pending_count + 1u;
 }
 
 bool bridge_ring_consume_reached_usb_flush_boundary(bridge_ring_t *ring, size_t count) {
-    uint32_t pending_bytes;
+    uint32_t coalesced_bytes;
+    uint32_t deferred_coalesced_bytes;
+    uint32_t pending_count;
+    uint32_t first_pending = 0u;
+    uint32_t shift_index;
+    bool reached_boundary = false;
 
     if (ring == NULL) {
         return false;
     }
 
-    pending_bytes = ring->usb_flush_pending_bytes;
-    if (pending_bytes == 0u) {
-        return false;
+    pending_count = ring->usb_flush_pending_count;
+    if (pending_count != 0u) {
+        for (shift_index = 0u; shift_index < pending_count; ++shift_index) {
+            uint32_t pending_bytes = ring->usb_flush_pending_bytes[shift_index];
+
+            if (pending_bytes <= (uint32_t)count) {
+                ring->usb_flush_pending_bytes[shift_index] = 0u;
+                reached_boundary = true;
+            } else {
+                ring->usb_flush_pending_bytes[shift_index] = pending_bytes - (uint32_t)count;
+            }
+        }
+
+        while ((first_pending < pending_count) && (ring->usb_flush_pending_bytes[first_pending] == 0u)) {
+            first_pending += 1u;
+        }
+
+        if (first_pending == pending_count) {
+            ring->usb_flush_pending_count = 0u;
+        } else if (first_pending != 0u) {
+            for (shift_index = 0u; shift_index < (pending_count - first_pending); ++shift_index) {
+                ring->usb_flush_pending_bytes[shift_index] = ring->usb_flush_pending_bytes[shift_index + first_pending];
+            }
+            for (; shift_index < pending_count; ++shift_index) {
+                ring->usb_flush_pending_bytes[shift_index] = 0u;
+            }
+            ring->usb_flush_pending_count = pending_count - first_pending;
+        }
     }
 
-    if (count >= pending_bytes) {
-        ring->usb_flush_pending_bytes = 0u;
-        return true;
+    coalesced_bytes = ring->usb_flush_coalesced_bytes;
+    deferred_coalesced_bytes = ring->usb_flush_deferred_coalesced_bytes;
+
+    if (coalesced_bytes != 0u) {
+        if (coalesced_bytes <= (uint32_t)count) {
+            ring->usb_flush_coalesced_bytes = 0u;
+            reached_boundary = true;
+        } else {
+            ring->usb_flush_coalesced_bytes = coalesced_bytes - (uint32_t)count;
+        }
     }
 
-    ring->usb_flush_pending_bytes = pending_bytes - (uint32_t)count;
-    return false;
+    if (deferred_coalesced_bytes != 0u) {
+        if (deferred_coalesced_bytes <= (uint32_t)count) {
+            ring->usb_flush_deferred_coalesced_bytes = 0u;
+            reached_boundary = true;
+        } else {
+            ring->usb_flush_deferred_coalesced_bytes = deferred_coalesced_bytes - (uint32_t)count;
+        }
+    }
+
+    if ((ring->usb_flush_coalesced_bytes == 0u) && (ring->usb_flush_deferred_coalesced_bytes != 0u)) {
+        ring->usb_flush_coalesced_bytes = ring->usb_flush_deferred_coalesced_bytes;
+        ring->usb_flush_deferred_coalesced_bytes = 0u;
+    }
+
+    if (ring->usb_flush_force_on_write && (count != 0u)) {
+        if ((ring->usb_flush_pending_count == 0u)
+            && (ring->usb_flush_coalesced_bytes == 0u)
+            && (ring->usb_flush_deferred_coalesced_bytes == 0u)
+            && (bridge_ring_used(ring) == 0u)) {
+            ring->usb_flush_force_on_write = false;
+        }
+        reached_boundary = true;
+    }
+
+    return reached_boundary;
 }

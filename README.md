@@ -20,7 +20,7 @@ The implementation uses:
 - A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
 - TinyUSB CDC transport to stream captured bytes to the host PC
 
-The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, keeps a 2 KB foreground USB burst size while leaving a deeper TinyUSB CDC TX buffer behind it, flushes short tails on ring drain or partial USB writes instead of preserving exact buffered chip-select boundaries, resets the sniffer back to its idle wait state after recovery so capture resumes only on the next chip-select assertion, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
+The current scaffold uses chained ping-pong DMA reservations of up to 1 KB each to reduce IRQ overhead, keeps a 512-byte foreground USB burst size while leaving a deeper TinyUSB CDC TX buffer behind it, flushes short tails on ring drain or partial USB writes instead of preserving exact buffered chip-select boundaries, resets the sniffer back to its idle wait state after recovery so capture resumes only on the next chip-select assertion, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, boundary-queue saturation, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
 
 ## Overview
 
@@ -28,7 +28,7 @@ The firmware monitors SPI MOSI traffic, stores captured bytes in a DMA-backed ri
 
 Key behavior:
 
-- Starts capturing MOSI traffic immediately at startup
+- Arms capture immediately at startup and begins forwarding on the next clean chip-select boundary
 - No CLI or runtime command interface
 - USB CDC is read-only from the PC side
 - Focused on keeping the firmware path as small and direct as possible
@@ -62,9 +62,11 @@ PicoSPIBridge is designed as an always-on bridge.
 
 When powered up, the firmware arms capture immediately without waiting for user commands. If the bus is already idle, capture begins on the next chip-select assertion; if power-up happens mid-transfer, the bridge waits for the next clean chip-select-high then chip-select-low boundary before streaming bytes. Forwarding to the host begins after USB enumerates and the host starts reading, subject to the available ring-buffer backlog. There is no shell, command parser, or text protocol exposed over the serial interface.
 
-The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source.
+The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source. CDC DTR and RTS line-state changes are ignored and do not gate capture or streaming.
 
-During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. Flushes are still driven primarily by short ring drains and partial USB writes, but a CS-high tail publish now also requests one later CDC flush after that oldest pending tail has actually drained, without restoring exact buffered chip-select boundary tracking.
+During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. Each foreground drain pass is intentionally bounded to a small number of CDC writes so capture work gets CPU time back quickly. Flushes are still driven primarily by short ring drains and partial USB writes, but a CS-high tail publish now also requests one later CDC flush after that oldest pending tail has actually drained, without restoring exact buffered chip-select boundary tracking.
+
+If multiple transaction-end flush points pile up faster than the foreground USB path can drain them, the firmware keeps a small fixed queue of pending boundaries. When that queue saturates, it preserves the first coalesced later flush point and can hold one deferred coalesced later flush point behind it. If even that bounded tracking is exhausted, the firmware falls back to flushing every subsequent USB write until the buffered backlog has drained, so later boundaries do not become silently untracked.
 
 The bridge does not try to infer protocol-level message boundaries for the host. Host software is expected to determine SPI or application framing from the captured payload bytes themselves.
 
@@ -175,6 +177,7 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 - The current ring buffer is sized to provide about 200 ms of capture headroom at 5 MHz SPI before USB backpressure would force drops
 - When the host falls behind badly enough that the ring cannot reserve another DMA span, the firmware keeps capture running and counts the overflow as dropped bytes
 - Runtime counters now track USB write calls, USB bytes written, USB flush calls, overflow-buffer commits, DMA rearms, publish-invariant failures, and ring high-water mark for on-target tuning
+- Runtime counters also track boundary-queue saturation events so aggressive transaction-end coalescing is visible during tuning
 - Host-side tests cover ring publish semantics, publish-invariant failure handling, USB short-packet flush behavior, overflow-commit accounting, and DMA span reservation math without requiring RP2040 hardware
 - `GPIO4` is reserved for possible future MISO monitoring, but MISO capture is not supported right now
 

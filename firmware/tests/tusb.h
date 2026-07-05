@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 bool tud_ready(void);
+bool tud_cdc_n_connected(uint8_t itf);
 uint32_t tud_cdc_n_write_available(uint8_t itf);
 uint32_t tud_cdc_n_write(uint8_t itf, const void *buffer, uint32_t size);
 void tud_cdc_n_write_flush(uint8_t itf);

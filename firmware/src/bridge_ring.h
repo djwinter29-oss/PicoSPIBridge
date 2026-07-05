@@ -7,10 +7,13 @@
 
 #include "bridge_config.h"
 
+#define BRIDGE_USB_FLUSH_BOUNDARY_SLOTS 4u
+
 typedef struct {
     volatile uint32_t usb_write_calls;
     volatile uint32_t usb_bytes_written;
     volatile uint32_t usb_flush_calls;
+    volatile uint32_t usb_flush_boundary_overflows;
     volatile uint32_t overflow_commits;
     volatile uint32_t dma_rearm_count;
     volatile uint32_t publish_invariant_failures;
@@ -29,7 +32,11 @@ typedef struct {
     volatile uint32_t read_index;
     volatile uint32_t write_index;
     volatile uint32_t dropped_bytes;
-    volatile uint32_t usb_flush_pending_bytes;
+    volatile uint32_t usb_flush_pending_bytes[BRIDGE_USB_FLUSH_BOUNDARY_SLOTS];
+    volatile uint32_t usb_flush_pending_count;
+    volatile uint32_t usb_flush_coalesced_bytes;
+    volatile uint32_t usb_flush_deferred_coalesced_bytes;
+    volatile bool usb_flush_force_on_write;
     bridge_runtime_stats_t stats;
     uint8_t storage[BRIDGE_RING_SIZE];
 } bridge_ring_t;
