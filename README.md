@@ -20,7 +20,7 @@ The implementation uses:
 - A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
 - TinyUSB CDC transport to stream captured bytes to the host PC
 
-The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, keeps a 2 KB foreground USB burst size while leaving a deeper TinyUSB CDC TX buffer behind it, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, tracks pending chip-select-release boundaries directly in the buffered data so final boundary flushes survive partial USB writes and dense buffered bursts without a small fixed queue limit, resets the sniffer back to its idle wait state after recovery so capture resumes only on the next chip-select assertion, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
+The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, keeps a 2 KB foreground USB burst size while leaving a deeper TinyUSB CDC TX buffer behind it, flushes short tails on ring drain or partial USB writes instead of preserving exact buffered chip-select boundaries, resets the sniffer back to its idle wait state after recovery so capture resumes only on the next chip-select assertion, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
 
 ## Overview
 
@@ -64,11 +64,11 @@ When powered up, the firmware begins capturing monitored traffic without waiting
 
 The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source.
 
-During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. When the foreground capture path observes chip select high and publishes a transfer tail, it marks that boundary in the buffered data and flushes once that boundary has actually been handed to TinyUSB, even if USB backpressure required multiple writes or many buffered bursts accumulated before USB drained the earlier ones.
+During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. Flushes are still driven primarily by short ring drains and partial USB writes, but a CS-high tail publish now also requests one later CDC flush after that oldest pending tail has actually drained, without restoring exact buffered chip-select boundary tracking.
 
 The bridge does not try to infer protocol-level message boundaries for the host. Host software is expected to determine SPI or application framing from the captured payload bytes themselves.
 
-When the host falls behind or the capture path overruns available buffering, the firmware may drop bytes to keep forwarding the newest capture data. Those drops are tracked in device-side counters only; they are not signaled inline in the byte stream, and the current firmware does not export those counters back to the host. After an overrun, the firmware remains in recovery until the foreground loop sees chip select high, resets the sniffer to its idle wait-for-chip-select state, and rearms capture for the next fresh chip-select assertion. The transfer active during recovery may be skipped as part of the best-effort model, but resumed capture starts at a clean transfer boundary.
+When the host falls behind or the capture path overruns available buffering, the firmware may drop bytes to keep forwarding the newest capture data. Those drops are tracked in device-side counters only; they are not signaled inline in the byte stream, and the current firmware does not export those counters back to the host. After an overrun, the firmware remains in recovery until it observes or latches a clean chip-select-high boundary, then rearms the sniffer in a recovery-only wait-high-then-low state so capture resumes on the next fresh chip-select assertion. The transfer active during recovery may be skipped as part of the best-effort model, but resumed capture starts at a clean transfer boundary.
 
 ## Typical Use
 
@@ -168,7 +168,7 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 - Host software is expected to determine its own SPI or application framing from the captured payload bytes
 - The stream is best-effort: under overload or backpressure, bytes may be dropped without inline stream markers
 - Drop visibility is counter-only on the device side; host software should tolerate missing bytes when possible
-- USB flushes are boundary-driven: continuous traffic favors throughput, while chip-select release requests a flush so short transfer tails reach the host promptly
+- USB flushes are throughput-first: continuous traffic favors throughput, while short ring drains, partial USB writes, and CS-high tail publishes request a flush
 - Capture starts on boot, but host-visible streaming begins only after USB enumerates and the host starts reading; early traffic is limited by the available ring-buffer backlog
 - The current scaffold discards partial bytes immediately when active-low chip select deasserts, so only selected-transfer data is forwarded
 - The current DMA and USB buffering path is tuned to reduce per-byte CPU overhead while still targeting at least 5 MHz SPI monitoring, assuming the host keeps up with the USB CDC stream

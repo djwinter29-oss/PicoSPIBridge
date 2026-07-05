@@ -24,4 +24,8 @@ static inline void spi_mosi_sniffer_program_init(PIO pio, uint sm, uint offset) 
     pio_sm_set_enabled(pio, sm, true);
 }
 
+static inline void spi_mosi_sniffer_recovery_program_init(PIO pio, uint sm, uint offset) {
+    spi_mosi_sniffer_program_init(pio, sm, offset);
+}
+
 #endif

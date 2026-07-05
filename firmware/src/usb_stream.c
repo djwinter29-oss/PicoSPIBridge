@@ -12,7 +12,6 @@ void usb_stream_poll(bridge_ring_t *ring) {
     uint32_t available_budget;
     size_t initial_used;
     uint32_t total_written = 0u;
-    bool boundary_reached = false;
     bool should_flush = false;
 
     if (ring == NULL) {
@@ -51,7 +50,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
         }
 
         {
-            size_t available_count = bridge_ring_peek_contiguous_up_to_usb_flush_boundary(ring, &chunk);
+            size_t available_count = bridge_ring_peek_contiguous(ring, &chunk);
             if (count > available_count) {
                 count = available_count;
             }
@@ -72,12 +71,8 @@ void usb_stream_poll(bridge_ring_t *ring) {
         bridge_ring_consume(ring, written);
         remaining_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 
-        if (bridge_ring_consume_reached_usb_flush_boundary(ring)) {
-            boundary_reached = true;
-        }
-
-        if (boundary_reached) {
-            should_flush = total_written != 0u;
+        if ((written != 0u) && bridge_ring_consume_reached_usb_flush_boundary(ring, written)) {
+            should_flush = true;
             break;
         }
 

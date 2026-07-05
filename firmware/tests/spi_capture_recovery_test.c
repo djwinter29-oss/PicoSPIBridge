@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "hardware/dma.h"
+#include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/pio.h"
 #include "spi_mosi_sniffer.pio.h"
@@ -26,6 +27,7 @@ bool mock_pio_sm_enabled = false;
 uint32_t mock_pio_last_disable_sequence = 0u;
 uint32_t mock_pio_clear_fifos_calls = 0u;
 bool mock_gpio_values[32] = {0};
+gpio_irq_callback_t mock_gpio_irq_callback = 0;
 uint32_t mock_spi_mosi_sniffer_init_calls = 0u;
 uint32_t mock_spi_mosi_sniffer_last_init_sequence = 0u;
 uint32_t mock_call_sequence = 0u;
@@ -60,6 +62,7 @@ int main(void) {
     assert(mock_dma_configure_transfer_counts[1] == BRIDGE_DMA_BLOCK_SIZE);
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
     assert(address_in_ring(&ring, mock_dma_write_addresses[1]));
+    assert(mock_gpio_irq_callback != 0);
 
     set_cs_level(false);
     ring.read_index = 1u;
@@ -91,7 +94,6 @@ int main(void) {
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
     assert(mock_spi_mosi_sniffer_init_calls == 2u);
     assert(mock_pio_sm_enabled == true);
-    assert(ring.usb_flush_boundary_count == 0u);
 
     ring.read_index = 1u;
     dma_hw->ch[0].transfer_count = BRIDGE_DMA_BLOCK_SIZE - 3u;
@@ -116,8 +118,9 @@ int main(void) {
 
     ring.read_index = (BRIDGE_DMA_BLOCK_SIZE * 2u) + 1u;
     set_cs_level(true);
-    spi_capture_poll();
+    mock_gpio_trigger_irq(PICO_SPI_BRIDGE_CS_PIN, GPIO_IRQ_EDGE_RISE);
     set_cs_level(false);
+    spi_capture_poll();
 
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
     assert(mock_spi_mosi_sniffer_init_calls == 3u);
@@ -128,7 +131,7 @@ int main(void) {
     spi_capture_poll();
     set_cs_level(false);
 
-    assert(ring.usb_flush_boundary_count == 1u);
+    assert(ring.write_index == 3u);
 
     return 0;
 }

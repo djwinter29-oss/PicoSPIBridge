@@ -1,4 +1,5 @@
 #include "hardware/dma.h"
+#include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/pio.h"
 #include "hardware/sync.h"
@@ -34,6 +35,7 @@ typedef struct {
     volatile bool recovery_active;
     volatile bool recovery_quiescing;
     volatile bool recovery_resume_pending;
+    volatile bool recovery_boundary_seen;
     uint32_t reserved_write_index;
     spi_capture_dma_target_t dma_targets[2];
     uint8_t overflow_blocks[2][BRIDGE_DMA_BLOCK_SIZE];
@@ -50,6 +52,7 @@ typedef struct {
 } spi_capture_snapshot_t;
 
 static void spi_capture_configure_dma_channel(uint block_index, bool trigger);
+static bool spi_capture_all_dma_idle(void);
 static bool spi_capture_recovery_boundary_ready(void);
 static void spi_capture_restart_dma_after_recovery(void);
 static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t count);
@@ -57,6 +60,22 @@ static void spi_capture_enter_recovery(void);
 
 static void spi_capture_reset_sniffer_to_wait_cs_low(void) {
     spi_mosi_sniffer_program_init(capture.pio, capture.sm, capture.program_offset);
+}
+
+static void spi_capture_reset_sniffer_to_wait_cs_high_then_low(void) {
+    spi_mosi_sniffer_recovery_program_init(capture.pio, capture.sm, capture.program_offset);
+}
+
+static void spi_capture_cs_irq_callback(uint gpio, uint32_t events) {
+    if ((gpio != PICO_SPI_BRIDGE_CS_PIN) || ((events & GPIO_IRQ_EDGE_RISE) == 0u)) {
+        return;
+    }
+
+    if (!capture.recovery_active) {
+        return;
+    }
+
+    capture.recovery_boundary_seen = true;
 }
 
 static void spi_capture_stop_sniffer_for_recovery(void) {
@@ -82,6 +101,9 @@ static void spi_capture_abort_dma_for_recovery(void) {
     capture.shared.flushed_counts[1] = 0u;
     capture.recovery_quiescing = false;
     capture.recovery_resume_pending = true;
+    capture.recovery_boundary_seen = gpio_get(PICO_SPI_BRIDGE_CS_PIN)
+        && spi_capture_all_dma_idle()
+        && pio_sm_is_rx_fifo_empty(capture.pio, capture.sm);
 }
 
 static void spi_capture_enter_recovery(void) {
@@ -100,7 +122,7 @@ static bool spi_capture_all_dma_idle(void) {
 
 static bool spi_capture_recovery_boundary_ready(void) {
     return capture.recovery_resume_pending
-        && gpio_get(PICO_SPI_BRIDGE_CS_PIN)
+    && (capture.recovery_boundary_seen || gpio_get(PICO_SPI_BRIDGE_CS_PIN))
         && spi_capture_all_dma_idle()
         && pio_sm_is_rx_fifo_empty(capture.pio, capture.sm);
 }
@@ -108,13 +130,14 @@ static bool spi_capture_recovery_boundary_ready(void) {
 static void spi_capture_restart_dma_after_recovery(void) {
     capture.recovery_active = false;
     capture.recovery_resume_pending = false;
+    capture.recovery_boundary_seen = false;
     capture.reserved_write_index = capture.ring->write_index;
     capture.shared.active_block_index = 0u;
     capture.shared.flushed_counts[0] = 0u;
     capture.shared.flushed_counts[1] = 0u;
 
-    // Reset the sniffer to its idle wait state so resumed capture starts on the next CS-low assertion.
-    spi_capture_reset_sniffer_to_wait_cs_low();
+    // Reset the sniffer to wait for a fresh high-to-low transition so recovery never re-enters mid-transfer.
+    spi_capture_reset_sniffer_to_wait_cs_high_then_low();
 
     spi_capture_configure_dma_channel(0u, false);
     spi_capture_configure_dma_channel(1u, false);
@@ -307,6 +330,7 @@ void spi_capture_init(const spi_capture_config_t *config) {
     capture.recovery_active = false;
     capture.recovery_quiescing = false;
     capture.recovery_resume_pending = false;
+    capture.recovery_boundary_seen = false;
     capture.reserved_write_index = capture.ring->write_index;
 
     pio_gpio_init(capture.pio, PICO_SPI_BRIDGE_SCK_PIN);
@@ -318,6 +342,7 @@ void spi_capture_init(const spi_capture_config_t *config) {
     gpio_disable_pulls(PICO_SPI_BRIDGE_SCK_PIN);
     gpio_disable_pulls(PICO_SPI_BRIDGE_MOSI_PIN);
     gpio_disable_pulls(PICO_SPI_BRIDGE_CS_PIN);
+    gpio_set_irq_enabled_with_callback(PICO_SPI_BRIDGE_CS_PIN, GPIO_IRQ_EDGE_RISE, true, spi_capture_cs_irq_callback);
 
     offset = pio_add_program(capture.pio, &spi_mosi_sniffer_program);
     capture.program_offset = offset;
