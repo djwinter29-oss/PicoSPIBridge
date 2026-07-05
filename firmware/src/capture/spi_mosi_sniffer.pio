@@ -1,0 +1,44 @@
+.program spi_mosi_sniffer
+
+.define SCK_PIN 2
+.define MOSI_PIN 3
+.define MISO_PIN 4
+.define CS_PIN 5
+
+; Sample MOSI on each SCK rising edge while chip select is active low.
+.wrap_target
+wait_cs_low:
+    wait 0 gpio CS_PIN
+byteloop:
+    set x, 7
+bitloop:
+    jmp pin drop_partial
+    wait 0 gpio SCK_PIN
+    jmp pin drop_partial
+    wait 1 gpio SCK_PIN
+    jmp pin drop_partial
+    in pins, 1
+    jmp x-- bitloop
+    jmp byteloop
+drop_partial:
+    mov isr, null
+    jmp wait_cs_low
+.wrap
+
+% c-sdk {
+#define PICO_SPI_BRIDGE_SCK_PIN SCK_PIN
+#define PICO_SPI_BRIDGE_MOSI_PIN MOSI_PIN
+#define PICO_SPI_BRIDGE_MISO_PIN MISO_PIN
+#define PICO_SPI_BRIDGE_CS_PIN CS_PIN
+
+static inline void spi_mosi_sniffer_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = spi_mosi_sniffer_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, PICO_SPI_BRIDGE_MOSI_PIN);
+    sm_config_set_in_shift(&c, false, true, 8);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_jmp_pin(&c, PICO_SPI_BRIDGE_CS_PIN);
+    sm_config_set_clkdiv(&c, 1.0f);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

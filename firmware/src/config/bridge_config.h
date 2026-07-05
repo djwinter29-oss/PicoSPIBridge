@@ -1,0 +1,8 @@
+#ifndef BRIDGE_CONFIG_H
+#define BRIDGE_CONFIG_H
+
+#define BRIDGE_RING_SIZE 65536u
+#define BRIDGE_DMA_BLOCK_SIZE 64u
+#define BRIDGE_USB_CHUNK_SIZE 64u
+
+#endif
