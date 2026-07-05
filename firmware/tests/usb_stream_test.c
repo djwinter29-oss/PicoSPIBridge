@@ -91,11 +91,11 @@ static void test_full_packet_flushes_when_batch_drains_ring(void) {
 
     assert(stub_write_calls == 1u);
     assert(stub_available_calls == 1u);
-    assert(stub_flush_calls == 1u);
+    assert(stub_flush_calls == 0u);
     assert(stub_last_write_size == BRIDGE_USB_PACKET_SIZE);
     assert(ring.stats.usb_write_calls == 1u);
     assert(ring.stats.usb_bytes_written == BRIDGE_USB_PACKET_SIZE);
-    assert(ring.stats.usb_flush_calls == 1u);
+    assert(ring.stats.usb_flush_calls == 0u);
     assert(ring.read_index == ring.write_index);
 }
 
@@ -105,6 +105,7 @@ static void test_short_tail_flushes(void) {
     bridge_ring_init(&ring);
     reset_usb_stub();
     fill_ring(&ring, 10u);
+    bridge_ring_note_usb_flush_boundary(&ring);
 
     usb_stream_poll(&ring);
 
@@ -115,6 +116,7 @@ static void test_short_tail_flushes(void) {
     assert(ring.stats.usb_write_calls == 1u);
     assert(ring.stats.usb_bytes_written == 10u);
     assert(ring.stats.usb_flush_calls == 1u);
+    assert(ring.usb_flush_boundary_count == 0u);
 }
 
 static void test_full_tx_budget_flushes_during_continuous_stream(void) {
@@ -128,11 +130,11 @@ static void test_full_tx_budget_flushes_during_continuous_stream(void) {
 
     assert(stub_write_calls == 1u);
     assert(stub_available_calls == 1u);
-    assert(stub_flush_calls == 1u);
+    assert(stub_flush_calls == 0u);
     assert(stub_last_write_size == BRIDGE_USB_CHUNK_SIZE);
     assert(ring.stats.usb_write_calls == 1u);
     assert(ring.stats.usb_bytes_written == BRIDGE_USB_CHUNK_SIZE);
-    assert(ring.stats.usb_flush_calls == 1u);
+    assert(ring.stats.usb_flush_calls == 0u);
     assert(((ring.write_index - ring.read_index) & (BRIDGE_RING_SIZE - 1u)) == BRIDGE_USB_CHUNK_SIZE);
 }
 
@@ -156,10 +158,76 @@ static void test_partial_write_flushes_short_tail_and_keeps_remaining_data(void)
     assert(((ring.write_index - ring.read_index) & (BRIDGE_RING_SIZE - 1u)) == 68u);
 }
 
+static void test_boundary_flush_survives_partial_usb_write(void) {
+    bridge_ring_t ring;
+
+    bridge_ring_init(&ring);
+    reset_usb_stub();
+    stub_write_limit = 32u;
+    fill_ring(&ring, 96u);
+    bridge_ring_note_usb_flush_boundary(&ring);
+
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 1u);
+    assert(stub_available_calls == 1u);
+    assert(stub_flush_calls == 1u);
+    assert(ring.stats.usb_write_calls == 1u);
+    assert(ring.stats.usb_bytes_written == 32u);
+    assert(ring.stats.usb_flush_calls == 1u);
+    assert(ring.usb_flush_boundary_count == 1u);
+
+    stub_write_limit = BRIDGE_USB_CHUNK_SIZE;
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 2u);
+    assert(stub_available_calls == 2u);
+    assert(stub_flush_calls == 2u);
+    assert(ring.stats.usb_write_calls == 2u);
+    assert(ring.stats.usb_bytes_written == 96u);
+    assert(ring.stats.usb_flush_calls == 2u);
+    assert(ring.usb_flush_boundary_count == 0u);
+    assert(ring.read_index == ring.write_index);
+}
+
+static void test_multiple_boundaries_queue_before_usb_drains_first(void) {
+    bridge_ring_t ring;
+
+    bridge_ring_init(&ring);
+    reset_usb_stub();
+    fill_ring(&ring, 32u);
+    bridge_ring_note_usb_flush_boundary(&ring);
+    fill_ring(&ring, 64u);
+    bridge_ring_note_usb_flush_boundary(&ring);
+
+    stub_write_limit = 16u;
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 1u);
+    assert(stub_flush_calls == 1u);
+    assert(ring.usb_flush_boundary_count == 2u);
+
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 2u);
+    assert(stub_flush_calls == 2u);
+    assert(ring.usb_flush_boundary_count == 1u);
+
+    stub_write_limit = BRIDGE_USB_CHUNK_SIZE;
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 3u);
+    assert(stub_flush_calls == 3u);
+    assert(ring.usb_flush_boundary_count == 0u);
+    assert(ring.read_index == ring.write_index);
+}
+
 int main(void) {
     test_full_packet_flushes_when_batch_drains_ring();
     test_short_tail_flushes();
     test_full_tx_budget_flushes_during_continuous_stream();
     test_partial_write_flushes_short_tail_and_keeps_remaining_data();
+    test_boundary_flush_survives_partial_usb_write();
+    test_multiple_boundaries_queue_before_usb_drains_first();
     return 0;
 }

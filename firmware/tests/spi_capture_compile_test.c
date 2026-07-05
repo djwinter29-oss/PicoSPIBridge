@@ -1,5 +1,7 @@
 #include "hardware/dma.h"
+#include "hardware/gpio.h"
 #include "hardware/pio.h"
+#include "spi_mosi_sniffer.pio.h"
 
 #include "bridge_ring.h"
 #include "spi_capture.h"
@@ -12,10 +14,13 @@ uint32_t mock_dma_configure_transfer_counts[16] = {0};
 void (*mock_dma_irq0_handler)(void) = 0;
 mock_pio_hw_t mock_pio0_hw = {{0}};
 PIO pio0 = &mock_pio0_hw;
+bool mock_gpio_values[32] = {0};
+gpio_irq_callback_t mock_gpio_irq_callback = 0;
 
 int main(void) {
     bridge_ring_t ring;
 
+    mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = true;
     bridge_ring_init(&ring);
     spi_capture_init(&(spi_capture_config_t){.ring = &ring});
     spi_capture_poll();

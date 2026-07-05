@@ -18,9 +18,9 @@ The implementation uses:
 - Active-low chip select gating so capture starts only during transfers
 - Chained ping-pong DMA targets that write directly into reserved ring-buffer spans
 - A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
-- TinyUSB CDC to stream binary data to the host PC with short-packet-aware flush behavior
+- TinyUSB CDC transport to stream captured bytes to the host PC
 
-The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the CDC stream without aborting the active DMA transfer, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark.
+The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, queues pending chip-select-release boundaries so final boundary flushes survive partial USB writes and multiple buffered bursts, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
 
 ## Overview
 
@@ -28,7 +28,7 @@ The firmware monitors SPI MOSI traffic, stores captured bytes in a DMA-backed ri
 
 Key behavior:
 
-- Starts bridging MOSI traffic immediately at startup
+- Starts capturing MOSI traffic immediately at startup
 - No CLI or runtime command interface
 - USB CDC is read-only from the PC side
 - Focused on keeping the firmware path as small and direct as possible
@@ -39,7 +39,7 @@ The capture path is:
 
 1. Monitor SPI MOSI traffic on the RP2040
 2. DMA incoming data directly into reserved ring-buffer spans
-3. Stream the captured bytes over USB CDC as a binary data stream
+3. Stream the captured bytes over USB as a binary data stream
 4. Let a PC application decode, log, or display the traffic
 
 In the current firmware scaffold, the RP2040 listens on:
@@ -60,15 +60,21 @@ In the current firmware scaffold, the RP2040 listens on:
 
 PicoSPIBridge is designed as an always-on bridge.
 
-When powered up, the firmware begins forwarding monitored traffic without waiting for user commands. There is no shell, command parser, or text protocol exposed over the serial interface.
+When powered up, the firmware begins capturing monitored traffic without waiting for user commands. Forwarding to the host begins after USB enumerates and the host starts reading, subject to the available ring-buffer backlog. There is no shell, command parser, or text protocol exposed over the serial interface.
 
-The USB CDC connection is output-only for captured data. The host should treat the device as a read-only binary stream source.
+The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source.
+
+During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. When the foreground capture path observes chip select high and publishes a transfer tail, it queues a pending boundary and flushes once that boundary has actually been handed to TinyUSB, even if USB backpressure required multiple writes or multiple bursts accumulated before USB drained the earlier one.
+
+The bridge does not try to infer protocol-level message boundaries for the host. Host software is expected to determine SPI or application framing from the captured payload bytes themselves.
+
+When the host falls behind or the capture path overruns available buffering, the firmware may drop bytes to keep forwarding the newest capture data. Those drops are tracked in device-side counters only; they are not signaled inline in the byte stream, and the current firmware does not export those counters back to the host. After an overrun, the firmware remains in recovery until the foreground loop sees chip select high and resets the capture path, so very short gaps may still be skipped as part of the best-effort model.
 
 ## Typical Use
 
 1. Connect the RP2040 device to the monitored SPI bus
 2. Connect the RP2040 USB port to a PC
-3. Open the USB CDC serial device from a host application
+3. Open the USB CDC device from a host application
 4. Read and process the binary output stream
 
 ## Build
@@ -159,8 +165,11 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 ## Notes
 
 - This project is aimed at monitoring MOSI traffic only, not controlling the SPI bus
-- Host software is expected to understand the binary stream format used by the firmware
-- Because the interface starts streaming on boot, host software should be ready to consume data as soon as the device enumerates
+- Host software is expected to determine its own SPI or application framing from the captured payload bytes
+- The stream is best-effort: under overload or backpressure, bytes may be dropped without inline stream markers
+- Drop visibility is counter-only on the device side; host software should tolerate missing bytes when possible
+- USB flushes are boundary-driven: continuous traffic favors throughput, while chip-select release requests a flush so short transfer tails reach the host promptly
+- Capture starts on boot, but host-visible streaming begins only after USB enumerates and the host starts reading; early traffic is limited by the available ring-buffer backlog
 - The current scaffold discards partial bytes immediately when active-low chip select deasserts, so only selected-transfer data is forwarded
 - The current DMA and USB buffering path is tuned to reduce per-byte CPU overhead while still targeting at least 5 MHz SPI monitoring, assuming the host keeps up with the USB CDC stream
 - The current ring buffer is sized to provide about 200 ms of capture headroom at 5 MHz SPI before USB backpressure would force drops
@@ -171,4 +180,4 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 
 ## Status
 
-This repository contains a first-pass Pico SDK firmware scaffold under `firmware/` for MOSI-only streaming. It is intended as a minimal base that can be refined against the target SPI timing and framing requirements.
+This repository contains a first-pass Pico SDK firmware scaffold under `firmware/` for MOSI-only streaming. It is intended as a minimal base that can be refined against the target SPI timing and host-side framing requirements.

@@ -5,6 +5,7 @@
 #include "hardware/dma.h"
 #include "hardware/irq.h"
 #include "hardware/pio.h"
+#include "spi_mosi_sniffer.pio.h"
 
 #include "bridge_config.h"
 #include "bridge_ring.h"
@@ -18,6 +19,11 @@ uint32_t mock_dma_configure_transfer_counts[16] = {0};
 void (*mock_dma_irq0_handler)(void) = 0;
 mock_pio_hw_t mock_pio0_hw = {{0}};
 PIO pio0 = &mock_pio0_hw;
+bool mock_gpio_values[32] = {0};
+
+static void set_cs_level(bool high) {
+    mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = high;
+}
 
 static bool address_in_ring(const bridge_ring_t *ring, const volatile void *address) {
     const uintptr_t start = (uintptr_t)&ring->storage[0];
@@ -30,6 +36,7 @@ static bool address_in_ring(const bridge_ring_t *ring, const volatile void *addr
 int main(void) {
     bridge_ring_t ring;
 
+    set_cs_level(true);
     bridge_ring_init(&ring);
 
     spi_capture_init(&(spi_capture_config_t){
@@ -42,6 +49,7 @@ int main(void) {
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
     assert(address_in_ring(&ring, mock_dma_write_addresses[1]));
 
+    set_cs_level(false);
     ring.read_index = 1u;
     dma_hw->ints0 = 1u << 0;
     dma_hw->ch[0].transfer_count = 0u;
@@ -56,14 +64,33 @@ int main(void) {
     mock_dma_irq0_handler();
 
     assert(ring.write_index == BRIDGE_DMA_BLOCK_SIZE);
-    assert(!address_in_ring(&ring, mock_dma_write_addresses[1]));
+
+    set_cs_level(true);
+    spi_capture_poll();
+    set_cs_level(false);
+
+    assert(!address_in_ring(&ring, mock_dma_write_addresses[0]));
+    assert(ring.usb_flush_boundary_count == 0u);
 
     dma_hw->ints0 = 1u << 0;
     dma_hw->ch[0].transfer_count = 0u;
     mock_dma_irq0_handler();
 
+    assert(!address_in_ring(&ring, mock_dma_write_addresses[0]));
+
+    set_cs_level(true);
+    spi_capture_poll();
+    set_cs_level(false);
+
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
-    assert(!address_in_ring(&ring, mock_dma_write_addresses[1]));
+
+    dma_hw->ch[0].transfer_count = BRIDGE_DMA_BLOCK_SIZE - 3u;
+    set_cs_level(true);
+    spi_capture_poll();
+    set_cs_level(false);
+
+    assert(ring.usb_flush_boundary_count == 1u);
+    assert(ring.usb_flush_boundaries[ring.usb_flush_boundary_head] == ring.total_bytes_produced);
 
     return 0;
 }

@@ -20,7 +20,8 @@ typedef struct {
     uint32_t transfer_count;
     bool drop_on_commit;
     bool overflow_counted;
-    bool ring_reserved;
+    volatile bool ring_reserved;
+    volatile bool dma_armed;
 } spi_capture_dma_target_t;
 
 typedef struct {
@@ -29,8 +30,9 @@ typedef struct {
     uint dma_channels[2];
     bridge_ring_t *ring;
     spi_capture_shared_state_t shared;
-    bool recovery_active;
-    bool recovery_resume_pending;
+    volatile bool recovery_active;
+    volatile bool recovery_quiescing;
+    volatile bool recovery_resume_pending;
     uint32_t reserved_write_index;
     spi_capture_dma_target_t dma_targets[2];
     uint8_t overflow_blocks[2][BRIDGE_DMA_BLOCK_SIZE];
@@ -46,20 +48,66 @@ typedef struct {
     uint32_t remaining_count;
 } spi_capture_snapshot_t;
 
+static void spi_capture_configure_dma_channel(uint block_index, bool trigger);
+static bool spi_capture_recovery_boundary_ready(void);
+static void spi_capture_restart_dma_after_recovery(void);
+static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t count);
+
+static bool spi_capture_all_dma_idle(void) {
+    return !capture.dma_targets[0].dma_armed && !capture.dma_targets[1].dma_armed;
+}
+
+static bool spi_capture_recovery_boundary_ready(void) {
+    return capture.recovery_resume_pending
+        && gpio_get(PICO_SPI_BRIDGE_CS_PIN)
+        && spi_capture_all_dma_idle()
+        && pio_sm_is_rx_fifo_empty(capture.pio, capture.sm);
+}
+
+static void spi_capture_restart_dma_after_recovery(void) {
+    capture.recovery_active = false;
+    capture.recovery_resume_pending = false;
+    capture.reserved_write_index = capture.ring->write_index;
+    capture.shared.active_block_index = 0u;
+    capture.shared.flushed_counts[0] = 0u;
+    capture.shared.flushed_counts[1] = 0u;
+
+    spi_capture_configure_dma_channel(0u, false);
+    spi_capture_configure_dma_channel(1u, false);
+    dma_start_channel_mask(1u << capture.dma_channels[capture.shared.active_block_index]);
+}
+
+static void spi_capture_try_finish_recovery(void) {
+    uint32_t irq_state = save_and_disable_interrupts();
+
+    if (spi_capture_recovery_boundary_ready()) {
+        spi_capture_restart_dma_after_recovery();
+    }
+
+    restore_interrupts(irq_state);
+}
+
 static bool spi_capture_recovery_can_resume(void) {
-    return !capture.dma_targets[0].ring_reserved && !capture.dma_targets[1].ring_reserved;
+    return !capture.dma_targets[0].ring_reserved
+        && !capture.dma_targets[1].ring_reserved
+        && spi_capture_all_dma_idle();
 }
 
 static void spi_capture_retire_dma_target(uint block_index) {
-    if (!capture.dma_targets[block_index].ring_reserved) {
-        return;
+    capture.dma_targets[block_index].dma_armed = false;
+
+    if (capture.dma_targets[block_index].ring_reserved) {
+        capture.dma_targets[block_index].ring_reserved = false;
     }
 
-    capture.dma_targets[block_index].ring_reserved = false;
+    if (capture.recovery_active && !capture.dma_targets[0].ring_reserved && !capture.dma_targets[1].ring_reserved) {
+        capture.recovery_quiescing = true;
+    }
 
-    if (capture.recovery_active && spi_capture_recovery_can_resume()) {
+    if (capture.recovery_quiescing && spi_capture_recovery_can_resume()) {
         capture.reserved_write_index = capture.ring->write_index;
         capture.recovery_resume_pending = true;
+        capture.recovery_quiescing = false;
     }
 }
 
@@ -112,11 +160,13 @@ static void spi_capture_configure_dma_channel(uint block_index, bool trigger) {
         capture.dma_targets[block_index].transfer_count,
         trigger
     );
+
+    capture.dma_targets[block_index].dma_armed = true;
 }
 
-static void spi_capture_publish_bytes_from_block(uint block_index, uint32_t count) {
+static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t count) {
     if (count == 0u) {
-        return;
+        return false;
     }
 
     if (capture.dma_targets[block_index].drop_on_commit) {
@@ -124,12 +174,15 @@ static void spi_capture_publish_bytes_from_block(uint block_index, uint32_t coun
             capture.ring->stats.overflow_commits += 1u;
         }
         capture.ring->dropped_bytes += count;
-        return;
+        return false;
     }
 
     if (!bridge_ring_publish(capture.ring, count)) {
         capture.recovery_active = true;
+        return false;
     }
+
+    return true;
 }
 
 static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapshot, uint32_t *irq_state) {
@@ -184,10 +237,8 @@ static void spi_capture_dma_irq_handler(void) {
         spi_capture_retire_dma_target(block_index);
         capture.shared.flushed_counts[block_index] = 0u;
         capture.shared.active_block_index = block_index ^ 1u;
-        spi_capture_configure_dma_channel(block_index, false);
-        if (capture.recovery_resume_pending) {
-            capture.recovery_active = false;
-            capture.recovery_resume_pending = false;
+        if (!capture.recovery_quiescing && !capture.recovery_resume_pending) {
+            spi_capture_configure_dma_channel(block_index, false);
         }
         capture.ring->stats.dma_rearm_count += 1u;
     }
@@ -200,6 +251,7 @@ void spi_capture_init(const spi_capture_config_t *config) {
     capture.pio = pio0;
     capture.sm = (uint)pio_claim_unused_sm(capture.pio, true);
     capture.recovery_active = false;
+    capture.recovery_quiescing = false;
     capture.recovery_resume_pending = false;
     capture.reserved_write_index = capture.ring->write_index;
 
@@ -245,6 +297,9 @@ void spi_capture_poll(void) {
     spi_capture_snapshot_t snapshot;
     uint32_t captured;
     uint32_t ready_count;
+    bool published;
+
+    spi_capture_try_finish_recovery();
 
     if (!spi_capture_snapshot_active_dma_state(&snapshot, &irq_state)) {
         return;
@@ -260,7 +315,10 @@ void spi_capture_poll(void) {
     // ponytail: Tail flushes still keep IRQs masked while publishing bytes so partial commits stay ordered with DMA completions.
     // The ceiling is extra interrupt latency during CS-high publish operations.
     // That is acceptable for now because the payload is already in the ring; move the consumer off-core if publish latency becomes the limit.
-    spi_capture_publish_bytes_from_block(snapshot.block_index, ready_count);
+    published = spi_capture_publish_bytes_from_block(snapshot.block_index, ready_count);
+    if (published) {
+        bridge_ring_note_usb_flush_boundary(capture.ring);
+    }
     capture.shared.flushed_counts[snapshot.block_index] = captured;
     restore_interrupts(irq_state);
 }

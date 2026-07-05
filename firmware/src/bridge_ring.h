@@ -7,6 +7,8 @@
 
 #include "bridge_config.h"
 
+#define BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE 32u
+
 typedef struct {
     volatile uint32_t usb_write_calls;
     volatile uint32_t usb_bytes_written;
@@ -29,7 +31,12 @@ typedef struct {
     volatile uint32_t read_index;
     volatile uint32_t write_index;
     volatile uint32_t dropped_bytes;
+    volatile uint32_t total_bytes_produced;
+    volatile uint32_t total_bytes_consumed;
+    volatile uint8_t usb_flush_boundary_head;
+    volatile uint8_t usb_flush_boundary_count;
     bridge_runtime_stats_t stats;
+    uint32_t usb_flush_boundaries[BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE];
     uint8_t storage[BRIDGE_RING_SIZE];
 } bridge_ring_t;
 
@@ -40,5 +47,7 @@ size_t bridge_ring_peek_contiguous(const bridge_ring_t *ring, const uint8_t **so
 bool bridge_ring_publish(bridge_ring_t *ring, size_t count);
 void bridge_ring_produce(bridge_ring_t *ring, size_t count);
 void bridge_ring_consume(bridge_ring_t *ring, size_t count);
+void bridge_ring_note_usb_flush_boundary(bridge_ring_t *ring);
+bool bridge_ring_consume_reached_usb_flush_boundary(bridge_ring_t *ring);
 
 #endif

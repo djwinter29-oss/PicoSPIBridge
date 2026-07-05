@@ -5,9 +5,10 @@
 
 #define GPIO_IN 0
 
+extern bool mock_gpio_values[32];
+
 static inline bool gpio_get(unsigned int pin) {
-    (void)pin;
-    return true;
+    return mock_gpio_values[pin];
 }
 
 static inline void gpio_set_dir(unsigned int pin, int direction) {

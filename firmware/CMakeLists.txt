@@ -34,6 +34,7 @@ target_link_libraries(pico_spi_bridge
     PRIVATE
         pico_stdlib
         hardware_dma
+        hardware_gpio
         hardware_irq
         hardware_pio
         tinyusb_device

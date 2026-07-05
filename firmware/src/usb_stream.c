@@ -12,6 +12,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
     uint32_t available_budget;
     size_t initial_used;
     uint32_t total_written = 0u;
+    bool boundary_reached = false;
     bool should_flush = false;
 
     if (ring == NULL) {
@@ -22,12 +23,13 @@ void usb_stream_poll(bridge_ring_t *ring) {
         return;
     }
 
+    initial_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
+
     available_budget = tud_cdc_n_write_available(0);
     if (available_budget == 0u) {
         return;
     }
 
-    initial_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
     if (initial_used == 0u) {
         return;
     }
@@ -40,7 +42,6 @@ void usb_stream_poll(bridge_ring_t *ring) {
         size_t remaining_used;
 
         if (available_budget == 0u) {
-            should_flush = total_written != 0u;
             break;
         }
 
@@ -71,13 +72,22 @@ void usb_stream_poll(bridge_ring_t *ring) {
         bridge_ring_consume(ring, written);
         remaining_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 
+        while (bridge_ring_consume_reached_usb_flush_boundary(ring)) {
+            boundary_reached = true;
+        }
+
+        if (boundary_reached) {
+            should_flush = total_written != 0u;
+            break;
+        }
+
         if (written != write_size) {
             should_flush = total_written != 0u;
             break;
         }
 
         if (remaining_used == 0u) {
-            should_flush = true;
+            should_flush = usb_stream_has_short_packet_tail(total_written);
             break;
         }
     }
