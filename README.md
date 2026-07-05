@@ -60,7 +60,7 @@ In the current firmware scaffold, the RP2040 listens on:
 
 PicoSPIBridge is designed as an always-on bridge.
 
-When powered up, the firmware begins capturing monitored traffic without waiting for user commands. Forwarding to the host begins after USB enumerates and the host starts reading, subject to the available ring-buffer backlog. There is no shell, command parser, or text protocol exposed over the serial interface.
+When powered up, the firmware arms capture immediately without waiting for user commands. If the bus is already idle, capture begins on the next chip-select assertion; if power-up happens mid-transfer, the bridge waits for the next clean chip-select-high then chip-select-low boundary before streaming bytes. Forwarding to the host begins after USB enumerates and the host starts reading, subject to the available ring-buffer backlog. There is no shell, command parser, or text protocol exposed over the serial interface.
 
 The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source.
 

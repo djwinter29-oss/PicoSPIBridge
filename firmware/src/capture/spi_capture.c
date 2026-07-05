@@ -348,9 +348,9 @@ void spi_capture_init(const spi_capture_config_t *config) {
     capture.program_offset = offset;
 
     // ponytail: This keeps CS gating in the PIO sampler instead of adding a framed packet layer.
-    // The ceiling is that the stream still carries raw bytes without explicit transfer boundary markers.
-    // That is acceptable for a minimal bridge; add host-visible framing if transfer boundaries matter downstream.
-    spi_capture_reset_sniffer_to_wait_cs_low();
+    // The ceiling is that the bridge will skip any transfer already in progress at startup so capture begins on a clean CS boundary.
+    // That is acceptable for a minimal bridge; add explicit host-visible framing only if mid-boot transfer salvage becomes necessary.
+    spi_capture_reset_sniffer_to_wait_cs_high_then_low();
 
     capture.dma_channels[0] = (uint)dma_claim_unused_channel(true);
     capture.dma_channels[1] = (uint)dma_claim_unused_channel(true);
@@ -363,9 +363,9 @@ void spi_capture_init(const spi_capture_config_t *config) {
     irq_set_exclusive_handler(DMA_IRQ_0, spi_capture_dma_irq_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 
-    // ponytail: Two chained 4 KB DMA buffers spend more SRAM to reduce full-block recycle frequency.
-    // The ceiling is that short transfers still require foreground partial-buffer flushes on CS high.
-    // That is acceptable here; move framing into hardware if that foreground flush becomes the limit.
+    // ponytail: Two chained 2 KB DMA buffers trade more IRQ churn for less wrap waste and smaller drop granularity near saturation.
+    // The ceiling is extra DMA recycle overhead if the IRQ path becomes the bottleneck.
+    // That is acceptable here because the observed failures are block-sized drops near the throughput edge; move to a different transport only if 2 KB blocks still do not hold the line.
     capture.shared.active_block_index = 0u;
     capture.shared.flushed_counts[0] = 0u;
     capture.shared.flushed_counts[1] = 0u;

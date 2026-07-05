@@ -11,7 +11,7 @@
 static bridge_ring_t bridge_ring;
 
 static void bridge_init_system_clock(void) {
-    hard_assert(set_sys_clock_khz(160000u, true));
+    hard_assert(set_sys_clock_khz(180000u, true));
 }
 
 static void bridge_init_status_led(void) {

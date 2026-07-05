@@ -29,6 +29,7 @@ uint32_t mock_pio_clear_fifos_calls = 0u;
 bool mock_gpio_values[32] = {0};
 gpio_irq_callback_t mock_gpio_irq_callback = 0;
 uint32_t mock_spi_mosi_sniffer_init_calls = 0u;
+uint32_t mock_spi_mosi_sniffer_recovery_init_calls = 0u;
 uint32_t mock_spi_mosi_sniffer_last_init_sequence = 0u;
 uint32_t mock_call_sequence = 0u;
 
