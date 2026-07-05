@@ -72,7 +72,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
         bridge_ring_consume(ring, written);
         remaining_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 
-        while (bridge_ring_consume_reached_usb_flush_boundary(ring)) {
+        if (bridge_ring_consume_reached_usb_flush_boundary(ring)) {
             boundary_reached = true;
         }
 

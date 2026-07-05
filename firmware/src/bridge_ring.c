@@ -4,6 +4,48 @@
 #include "bridge_ring.h"
 
 _Static_assert((BRIDGE_RING_SIZE & (BRIDGE_RING_SIZE - 1u)) == 0u, "BRIDGE_RING_SIZE must be a power of two");
+_Static_assert((BRIDGE_RING_SIZE % 32u) == 0u, "BRIDGE_RING_SIZE must be divisible by 32");
+
+static uint32_t bridge_ring_boundary_word_index(uint32_t index) {
+    return index >> 5;
+}
+
+static uint32_t bridge_ring_boundary_mask(uint32_t index) {
+    return 1u << (index & 31u);
+}
+
+static bool bridge_ring_boundary_is_set(const bridge_ring_t *ring, uint32_t index) {
+    return (ring->usb_flush_boundary_bits[bridge_ring_boundary_word_index(index)] & bridge_ring_boundary_mask(index)) != 0u;
+}
+
+static void bridge_ring_boundary_set(bridge_ring_t *ring, uint32_t index) {
+    ring->usb_flush_boundary_bits[bridge_ring_boundary_word_index(index)] |= bridge_ring_boundary_mask(index);
+}
+
+static void bridge_ring_boundary_clear(bridge_ring_t *ring, uint32_t index) {
+    ring->usb_flush_boundary_bits[bridge_ring_boundary_word_index(index)] &= ~bridge_ring_boundary_mask(index);
+}
+
+static bool bridge_ring_clear_consumed_boundaries(bridge_ring_t *ring, uint32_t start_index, size_t count) {
+    bool boundary_reached = false;
+    size_t offset;
+
+    for (offset = 0u; offset < count; ++offset) {
+        uint32_t index = (start_index + (uint32_t)offset) & (BRIDGE_RING_SIZE - 1u);
+
+        if (!bridge_ring_boundary_is_set(ring, index)) {
+            continue;
+        }
+
+        bridge_ring_boundary_clear(ring, index);
+        if (ring->usb_flush_boundary_count != 0u) {
+            ring->usb_flush_boundary_count -= 1u;
+        }
+        boundary_reached = true;
+    }
+
+    return boundary_reached;
+}
 
 static size_t bridge_ring_used(const bridge_ring_t *ring) {
     return (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
@@ -48,7 +90,6 @@ size_t bridge_ring_write(bridge_ring_t *ring, const uint8_t *source, size_t coun
     }
 
     ring->write_index = (uint32_t)((ring->write_index + written) & (BRIDGE_RING_SIZE - 1u));
-    ring->total_bytes_produced += (uint32_t)written;
     bridge_ring_update_high_water_mark(ring);
 
     return written;
@@ -76,8 +117,8 @@ size_t bridge_ring_read(bridge_ring_t *ring, uint8_t *destination, size_t count)
         memcpy(&destination[first_chunk], ring->storage, second_chunk);
     }
 
+    ring->usb_flush_boundary_reached = bridge_ring_clear_consumed_boundaries(ring, ring->read_index, read);
     ring->read_index = (uint32_t)((ring->read_index + read) & (BRIDGE_RING_SIZE - 1u));
-    ring->total_bytes_consumed += (uint32_t)read;
 
     return read;
 }
@@ -105,7 +146,6 @@ void bridge_ring_produce(bridge_ring_t *ring, size_t count) {
     }
 
     ring->write_index = (uint32_t)((ring->write_index + count) & (BRIDGE_RING_SIZE - 1u));
-    ring->total_bytes_produced += (uint32_t)count;
     bridge_ring_update_high_water_mark(ring);
 }
 
@@ -119,7 +159,6 @@ bool bridge_ring_publish(bridge_ring_t *ring, size_t count) {
     }
 
     ring->write_index = (uint32_t)((ring->write_index + count) & (BRIDGE_RING_SIZE - 1u));
-    ring->total_bytes_produced += (uint32_t)count;
     bridge_ring_update_high_water_mark(ring);
     return true;
 }
@@ -131,34 +170,27 @@ void bridge_ring_consume(bridge_ring_t *ring, size_t count) {
         count = used;
     }
 
+    ring->usb_flush_boundary_reached = bridge_ring_clear_consumed_boundaries(ring, ring->read_index, count);
     ring->read_index = (uint32_t)((ring->read_index + count) & (BRIDGE_RING_SIZE - 1u));
-    ring->total_bytes_consumed += (uint32_t)count;
 }
 
 void bridge_ring_note_usb_flush_boundary(bridge_ring_t *ring) {
-    uint8_t tail_index;
+    uint32_t boundary_index;
 
-    if (ring->usb_flush_boundary_count >= BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE) {
-        tail_index = (uint8_t)((ring->usb_flush_boundary_head + BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE - 1u) % BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE);
-        ring->usb_flush_boundaries[tail_index] = ring->total_bytes_produced;
+    if (bridge_ring_used(ring) == 0u) {
         return;
     }
 
-    tail_index = (uint8_t)((ring->usb_flush_boundary_head + ring->usb_flush_boundary_count) % BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE);
-    ring->usb_flush_boundaries[tail_index] = ring->total_bytes_produced;
-    ring->usb_flush_boundary_count += 1u;
+    boundary_index = (ring->write_index - 1u) & (BRIDGE_RING_SIZE - 1u);
+    if (!bridge_ring_boundary_is_set(ring, boundary_index)) {
+        bridge_ring_boundary_set(ring, boundary_index);
+        ring->usb_flush_boundary_count += 1u;
+    }
 }
 
 bool bridge_ring_consume_reached_usb_flush_boundary(bridge_ring_t *ring) {
-    if (ring->usb_flush_boundary_count == 0u) {
-        return false;
-    }
+    bool boundary_reached = ring->usb_flush_boundary_reached;
 
-    if ((int32_t)(ring->total_bytes_consumed - ring->usb_flush_boundaries[ring->usb_flush_boundary_head]) < 0) {
-        return false;
-    }
-
-    ring->usb_flush_boundary_head = (uint8_t)((ring->usb_flush_boundary_head + 1u) % BRIDGE_USB_FLUSH_BOUNDARY_QUEUE_SIZE);
-    ring->usb_flush_boundary_count -= 1u;
-    return true;
+    ring->usb_flush_boundary_reached = false;
+    return boundary_reached;
 }

@@ -20,7 +20,7 @@ The implementation uses:
 - A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
 - TinyUSB CDC transport to stream captured bytes to the host PC
 
-The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, queues pending chip-select-release boundaries so final boundary flushes survive partial USB writes and multiple buffered bursts, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
+The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, tracks pending chip-select-release boundaries directly in the buffered data so final boundary flushes survive partial USB writes and dense buffered bursts without a small fixed queue limit, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
 
 ## Overview
 
@@ -64,7 +64,7 @@ When powered up, the firmware begins capturing monitored traffic without waiting
 
 The USB CDC connection is output-only for captured data. The host should treat the device as a read-only, best-effort binary stream source.
 
-During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. When the foreground capture path observes chip select high and publishes a transfer tail, it queues a pending boundary and flushes once that boundary has actually been handed to TinyUSB, even if USB backpressure required multiple writes or multiple bursts accumulated before USB drained the earlier one.
+During continuous traffic, the firmware favors throughput and does not force extra CDC flushes just because the current write budget was consumed. When the foreground capture path observes chip select high and publishes a transfer tail, it marks that boundary in the buffered data and flushes once that boundary has actually been handed to TinyUSB, even if USB backpressure required multiple writes or many buffered bursts accumulated before USB drained the earlier ones.
 
 The bridge does not try to infer protocol-level message boundaries for the host. Host software is expected to determine SPI or application framing from the captured payload bytes themselves.
 

@@ -90,7 +90,6 @@ int main(void) {
     set_cs_level(false);
 
     assert(ring.usb_flush_boundary_count == 1u);
-    assert(ring.usb_flush_boundaries[ring.usb_flush_boundary_head] == ring.total_bytes_produced);
 
     return 0;
 }

@@ -222,6 +222,33 @@ static void test_multiple_boundaries_queue_before_usb_drains_first(void) {
     assert(ring.read_index == ring.write_index);
 }
 
+static void test_many_boundaries_survive_beyond_old_queue_limit(void) {
+    bridge_ring_t ring;
+    uint32_t index;
+
+    bridge_ring_init(&ring);
+    reset_usb_stub();
+
+    for (index = 0u; index < 40u; ++index) {
+        uint8_t value = (uint8_t)index;
+        assert(bridge_ring_write(&ring, &value, 1u) == 1u);
+        bridge_ring_note_usb_flush_boundary(&ring);
+    }
+
+    stub_write_limit = 1u;
+    for (index = 0u; index < 40u; ++index) {
+        usb_stream_poll(&ring);
+    }
+
+    assert(stub_write_calls == 40u);
+    assert(stub_flush_calls == 40u);
+    assert(ring.stats.usb_write_calls == 40u);
+    assert(ring.stats.usb_bytes_written == 40u);
+    assert(ring.stats.usb_flush_calls == 40u);
+    assert(ring.usb_flush_boundary_count == 0u);
+    assert(ring.read_index == ring.write_index);
+}
+
 int main(void) {
     test_full_packet_flushes_when_batch_drains_ring();
     test_short_tail_flushes();
@@ -229,5 +256,6 @@ int main(void) {
     test_partial_write_flushes_short_tail_and_keeps_remaining_data();
     test_boundary_flush_survives_partial_usb_write();
     test_multiple_boundaries_queue_before_usb_drains_first();
+    test_many_boundaries_survive_beyond_old_queue_limit();
     return 0;
 }

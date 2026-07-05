@@ -266,6 +266,27 @@ static void test_wraparound(void) {
     assert(bridge_ring_write(&ring, &source, 1) == 0);
 }
 
+static void test_usb_flush_boundaries_track_many_consumed_bytes(void) {
+    bridge_ring_t ring;
+    uint8_t byte = 0x5a;
+    size_t index;
+
+    bridge_ring_init(&ring);
+
+    for (index = 0u; index < 40u; ++index) {
+        assert(bridge_ring_write(&ring, &byte, 1u) == 1u);
+        bridge_ring_note_usb_flush_boundary(&ring);
+    }
+
+    assert(ring.usb_flush_boundary_count == 40u);
+
+    for (index = 0u; index < 40u; ++index) {
+        bridge_ring_consume(&ring, 1u);
+        assert(bridge_ring_consume_reached_usb_flush_boundary(&ring));
+        assert(ring.usb_flush_boundary_count == (40u - (uint32_t)index - 1u));
+    }
+}
+
 int main(void) {
     test_empty_read();
     test_round_trip();
@@ -281,5 +302,6 @@ int main(void) {
     test_strict_publish_updates_high_water_mark();
     test_strict_publish_records_invariant_failure();
     test_wraparound();
+    test_usb_flush_boundaries_track_many_consumed_bytes();
     return 0;
 }
