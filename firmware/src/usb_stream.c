@@ -35,6 +35,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
     while (true) {
         const uint8_t *chunk;
         size_t count;
+        uint32_t write_size;
         uint32_t written;
         size_t remaining_used;
 
@@ -59,7 +60,8 @@ void usb_stream_poll(bridge_ring_t *ring) {
             break;
         }
 
-        written = tud_cdc_n_write(0, chunk, count);
+        write_size = (uint32_t)count;
+        written = tud_cdc_n_write(0, chunk, write_size);
         if (written != 0u) {
             ring->stats.usb_write_calls += 1u;
             ring->stats.usb_bytes_written += written;
@@ -69,13 +71,13 @@ void usb_stream_poll(bridge_ring_t *ring) {
         bridge_ring_consume(ring, written);
         remaining_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 
-        if (written != count) {
+        if (written != write_size) {
             should_flush = usb_stream_has_short_packet_tail(total_written);
             break;
         }
 
         if (remaining_used == 0u) {
-            should_flush = usb_stream_has_short_packet_tail(total_written);
+            should_flush = true;
             break;
         }
     }

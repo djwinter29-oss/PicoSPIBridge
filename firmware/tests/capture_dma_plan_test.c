@@ -49,6 +49,36 @@ static void test_overflow_commit_rejects_null_state(void) {
     assert(capture_overflow_note_commit(NULL) == false);
 }
 
+static void test_poll_ready_bytes_returns_only_incremental_delta(void) {
+    uint32_t ready_count = 0u;
+
+    assert(capture_poll_ready_bytes(64u, 12u, 40u, &ready_count) == true);
+    assert(ready_count == 12u);
+}
+
+static void test_poll_ready_bytes_rejects_empty_or_fully_flushed_state(void) {
+    uint32_t ready_count = 99u;
+
+    assert(capture_poll_ready_bytes(64u, 0u, 64u, &ready_count) == false);
+    assert(capture_poll_ready_bytes(64u, 0u, 0u, &ready_count) == false);
+    assert(capture_poll_ready_bytes(64u, 24u, 40u, &ready_count) == false);
+}
+
+static void test_completion_ready_bytes_returns_unflushed_tail_only(void) {
+    assert(capture_completion_ready_bytes(64u, 0u) == 64u);
+    assert(capture_completion_ready_bytes(64u, 16u) == 48u);
+    assert(capture_completion_ready_bytes(64u, 64u) == 0u);
+    assert(capture_completion_ready_bytes(64u, 80u) == 0u);
+}
+
+static void test_publish_failure_resyncs_ring_reservation_state(void) {
+    uint32_t reserved_write_index = 123u;
+
+    capture_note_publish_failure(&reserved_write_index, 77u);
+
+    assert(reserved_write_index == 77u);
+}
+
 int main(void) {
     test_full_block_reservation();
     test_wrap_limited_reservation();
@@ -56,5 +86,9 @@ int main(void) {
     test_overflow_plan();
     test_overflow_commit_is_counted_once();
     test_overflow_commit_rejects_null_state();
+    test_poll_ready_bytes_returns_only_incremental_delta();
+    test_poll_ready_bytes_rejects_empty_or_fully_flushed_state();
+    test_completion_ready_bytes_returns_unflushed_tail_only();
+    test_publish_failure_resyncs_ring_reservation_state();
     return 0;
 }

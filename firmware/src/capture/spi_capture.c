@@ -44,6 +44,7 @@ typedef struct {
 } spi_capture_snapshot_t;
 
 static void spi_capture_assign_dma_target(uint block_index) {
+
     capture_dma_plan_t plan = capture_dma_plan_target(capture.reserved_write_index, capture.ring->read_index);
 
     if (plan.drop_on_commit) {
@@ -95,7 +96,9 @@ static void spi_capture_publish_bytes_from_block(uint block_index, uint32_t coun
         return;
     }
 
-    bridge_ring_publish(capture.ring, count);
+    if (!bridge_ring_publish(capture.ring, count)) {
+        capture_note_publish_failure(&capture.reserved_write_index, capture.ring->write_index);
+    }
 }
 
 static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapshot, uint32_t *irq_state) {
@@ -117,7 +120,7 @@ static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapsh
     snapshot->flushed_count = capture.shared.flushed_counts[snapshot->block_index];
     snapshot->remaining_count = dma_hw->ch[snapshot->dma_channel].transfer_count;
 
-    if ((snapshot->remaining_count == 0u) || (snapshot->remaining_count == snapshot->transfer_count)) {
+    if (!capture_poll_ready_bytes(snapshot->transfer_count, snapshot->flushed_count, snapshot->remaining_count, NULL)) {
         restore_interrupts(*irq_state);
         return false;
     }
@@ -139,7 +142,10 @@ static void spi_capture_dma_irq_handler(void) {
 
         dma_hw->ints0 = dma_mask;
 
-        ready_count = capture.dma_targets[block_index].transfer_count - capture.shared.flushed_counts[block_index];
+        ready_count = capture_completion_ready_bytes(
+            capture.dma_targets[block_index].transfer_count,
+            capture.shared.flushed_counts[block_index]
+        );
         if (ready_count != 0u) {
             spi_capture_publish_bytes_from_block(block_index, (uint32_t)ready_count);
         }
@@ -206,13 +212,12 @@ void spi_capture_poll(void) {
         return;
     }
 
-    captured = snapshot.transfer_count - snapshot.remaining_count;
-    if (captured <= snapshot.flushed_count) {
+    if (!capture_poll_ready_bytes(snapshot.transfer_count, snapshot.flushed_count, snapshot.remaining_count, &ready_count)) {
         restore_interrupts(irq_state);
         return;
     }
 
-    ready_count = captured - snapshot.flushed_count;
+    captured = snapshot.transfer_count - snapshot.remaining_count;
 
     // ponytail: Tail flushes still keep IRQs masked while publishing bytes so partial commits stay ordered with DMA completions.
     // The ceiling is extra interrupt latency during CS-high publish operations.

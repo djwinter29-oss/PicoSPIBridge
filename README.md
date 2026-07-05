@@ -93,7 +93,7 @@ This project uses the Raspberry Pi Pico SDK.
 
 ## Unit Tests
 
-The ring buffer has a small host-side unit test so you can validate the core queue logic without the Pico SDK toolchain.
+The repository includes host-side unit tests for the ring buffer, DMA span planning, overflow accounting, and USB flush behavior. The scripted test flow also builds the real Pico firmware first, so the generated PIO header and target-side capture sources are validated alongside the host logic tests.
 
 1. Configure the test build:
 
@@ -104,24 +104,26 @@ The ring buffer has a small host-side unit test so you can validate the core que
 2. Build the test:
 
 	```powershell
-	cmake --build build/tests
+	cmake --build build/tests --config Debug
 	```
 
 3. Run the test:
 
 	```powershell
-	ctest --test-dir build/tests --output-on-failure
+	ctest --test-dir build/tests -C Debug --output-on-failure
 	```
+
+On Windows, `tools/windows/test.ps1` is the simplest way to run validation because it bootstraps the Visual Studio developer environment, builds the Pico firmware, and then runs the host tests.
 
 ## Tool Scripts
 
 Helper scripts are provided under `tools/` for both Windows and Linux:
 
 - `tools/windows/build.ps1` configures and builds firmware plus host tests
-- `tools/windows/test.ps1` builds tests if needed and runs `ctest`
+- `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest`
 - `tools/windows/coverage.ps1` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 - `tools/linux/build.sh` configures and builds firmware plus host tests
-- `tools/linux/test.sh` builds tests if needed and runs `ctest`
+- `tools/linux/test.sh` builds the firmware, rebuilds the host tests, and runs `ctest`
 - `tools/linux/coverage.sh` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 
 Coverage scripts require `gcovr` and a GCC- or Clang-based host compiler.
@@ -163,8 +165,8 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 - The current DMA and USB buffering path is tuned to reduce per-byte CPU overhead while still targeting at least 5 MHz SPI monitoring, assuming the host keeps up with the USB CDC stream
 - The current ring buffer is sized to provide about 200 ms of capture headroom at 5 MHz SPI before USB backpressure would force drops
 - When the host falls behind badly enough that the ring cannot reserve another DMA span, the firmware keeps capture running and counts the overflow as dropped bytes
-- Runtime counters now track USB write calls, USB bytes written, USB flush calls, overflow-buffer commits, DMA rearms, and ring high-water mark for on-target tuning
-- Host-side tests cover ring publish semantics, USB short-packet flush behavior, and DMA span reservation math without requiring RP2040 hardware
+- Runtime counters now track USB write calls, USB bytes written, USB flush calls, overflow-buffer commits, DMA rearms, publish-invariant failures, and ring high-water mark for on-target tuning
+- Host-side tests cover ring publish semantics, publish-invariant failure handling, USB short-packet flush behavior, overflow-commit accounting, and DMA span reservation math without requiring RP2040 hardware
 - `GPIO4` is reserved for possible future MISO monitoring, but MISO capture is not supported right now
 
 ## Status

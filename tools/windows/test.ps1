@@ -1,4 +1,5 @@
 param(
+    [string]$FirmwareBuildDir = "build/firmware",
     [string]$TestBuildDir = "build/tests"
 )
 
@@ -11,6 +12,9 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 Push-Location $repoRoot
 try {
     Import-VsDevEnvironment
+
+    cmake -S firmware -B $FirmwareBuildDir
+    cmake --build $FirmwareBuildDir --config Debug
 
     cmake -S firmware/tests -B $TestBuildDir
     cmake --build $TestBuildDir --config Debug

@@ -17,12 +17,13 @@ int main(void) {
     bridge_ring_init(&bridge_ring);
 
     bridge_init_system_clock();
-    board_init();
-    tusb_init();
 
     spi_capture_init(&(spi_capture_config_t){
         .ring = &bridge_ring,
     });
+
+    board_init();
+    tusb_init();
 
     while (true) {
         tud_task();

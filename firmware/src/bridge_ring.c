@@ -5,10 +5,6 @@
 
 _Static_assert((BRIDGE_RING_SIZE & (BRIDGE_RING_SIZE - 1u)) == 0u, "BRIDGE_RING_SIZE must be a power of two");
 
-static uint32_t bridge_ring_next(uint32_t index) {
-    return (index + 1u) & (BRIDGE_RING_SIZE - 1u);
-}
-
 static size_t bridge_ring_used(const bridge_ring_t *ring) {
     return (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 }
@@ -110,17 +106,18 @@ void bridge_ring_produce(bridge_ring_t *ring, size_t count) {
     bridge_ring_update_high_water_mark(ring);
 }
 
-void bridge_ring_publish(bridge_ring_t *ring, size_t count) {
+bool bridge_ring_publish(bridge_ring_t *ring, size_t count) {
     size_t free = bridge_ring_free(ring);
 
     if (count > free) {
         ring->stats.publish_invariant_failures += 1u;
         ring->dropped_bytes += (uint32_t)count;
-        return;
+        return false;
     }
 
     ring->write_index = (uint32_t)((ring->write_index + count) & (BRIDGE_RING_SIZE - 1u));
     bridge_ring_update_high_water_mark(ring);
+    return true;
 }
 
 void bridge_ring_consume(bridge_ring_t *ring, size_t count) {

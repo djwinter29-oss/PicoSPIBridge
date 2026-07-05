@@ -1,13 +1,14 @@
 function Import-VsDevEnvironment {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    $needsVsDevEnvironment = (-not (Get-Command cmake -ErrorAction SilentlyContinue)) -or (-not (Get-Command cl -ErrorAction SilentlyContinue))
     $vsInstallPath = $null
     $vsDevCmd = $null
 
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue) -and -not (Test-Path $vswhere)) {
-        throw "CMake is not on PATH and Visual Studio Installer metadata was not found."
+    if ($needsVsDevEnvironment -and -not (Test-Path $vswhere)) {
+        throw "The Visual Studio developer environment is required, but Visual Studio Installer metadata was not found."
     }
 
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    if ($needsVsDevEnvironment) {
         $vsInstallPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
         if (-not $vsInstallPath) {
             throw "No Visual Studio installation with C++ build tools was found."

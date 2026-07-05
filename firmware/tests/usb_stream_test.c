@@ -80,7 +80,7 @@ static void fill_ring(bridge_ring_t *ring, uint32_t count) {
     }
 }
 
-static void test_full_packet_does_not_flush_on_empty(void) {
+static void test_full_packet_flushes_when_batch_drains_ring(void) {
     bridge_ring_t ring;
 
     bridge_ring_init(&ring);
@@ -91,11 +91,11 @@ static void test_full_packet_does_not_flush_on_empty(void) {
 
     assert(stub_write_calls == 1u);
     assert(stub_available_calls == 1u);
-    assert(stub_flush_calls == 0u);
+    assert(stub_flush_calls == 1u);
     assert(stub_last_write_size == BRIDGE_USB_PACKET_SIZE);
     assert(ring.stats.usb_write_calls == 1u);
     assert(ring.stats.usb_bytes_written == BRIDGE_USB_PACKET_SIZE);
-    assert(ring.stats.usb_flush_calls == 0u);
+    assert(ring.stats.usb_flush_calls == 1u);
     assert(ring.read_index == ring.write_index);
 }
 
@@ -138,7 +138,7 @@ static void test_partial_write_flushes_short_tail_and_keeps_remaining_data(void)
 }
 
 int main(void) {
-    test_full_packet_does_not_flush_on_empty();
+    test_full_packet_flushes_when_batch_drains_ring();
     test_short_tail_flushes();
     test_partial_write_flushes_short_tail_and_keeps_remaining_data();
     return 0;

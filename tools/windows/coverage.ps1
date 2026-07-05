@@ -13,6 +13,15 @@ Push-Location $repoRoot
 try {
     Import-VsDevEnvironment
 
+    $coverageCompiler = Get-Command clang -ErrorAction SilentlyContinue
+    if (-not $coverageCompiler) {
+        $coverageCompiler = Get-Command gcc -ErrorAction SilentlyContinue
+    }
+
+    if (-not $coverageCompiler) {
+        throw "Coverage on Windows requires a GCC- or Clang-based host compiler. The current Visual Studio/MSVC test setup can run tests, but it cannot produce gcov coverage output by itself."
+    }
+
     $gcovrArgs = @(
         "--root", $repoRoot,
         "--filter", "firmware/src",
@@ -27,9 +36,9 @@ try {
         throw "gcovr is required for coverage reporting. Install it with 'pip install gcovr'."
     }
 
-    cmake -S firmware/tests -B $CoverageBuildDir -DBRIDGE_ENABLE_COVERAGE=ON
-    cmake --build $CoverageBuildDir
-    ctest --test-dir $CoverageBuildDir --output-on-failure
+    cmake -G Ninja -S firmware/tests -B $CoverageBuildDir -DBRIDGE_ENABLE_COVERAGE=ON -DCMAKE_C_COMPILER=$coverageCompiler.Source
+    cmake --build $CoverageBuildDir --config Debug
+    ctest --test-dir $CoverageBuildDir -C Debug --output-on-failure
 
     New-Item -ItemType Directory -Force -Path $CoverageOutputDir | Out-Null
 

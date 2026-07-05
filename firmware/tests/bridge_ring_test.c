@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -237,7 +238,7 @@ static void test_strict_publish_records_invariant_failure(void) {
     ring.read_index = 1u;
     ring.write_index = 0u;
 
-    bridge_ring_publish(&ring, BRIDGE_RING_SIZE - 1u);
+    assert(bridge_ring_publish(&ring, BRIDGE_RING_SIZE - 1u) == false);
     assert(ring.write_index == 0u);
     assert(ring.stats.publish_invariant_failures == 1u);
     assert(ring.dropped_bytes == BRIDGE_RING_SIZE - 1u);
