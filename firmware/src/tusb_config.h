@@ -20,7 +20,7 @@
 #endif
 
 #ifndef CFG_TUD_CDC_TX_BUFSIZE
-#define CFG_TUD_CDC_TX_BUFSIZE 1024
+#define CFG_TUD_CDC_TX_BUFSIZE 4096
 #endif
 
 #ifndef CFG_TUD_CDC_EP_BUFSIZE
