@@ -5,10 +5,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "Import-VsDevEnvironment.ps1")
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 
 Push-Location $repoRoot
 try {
+    Import-VsDevEnvironment
+
     cmake -S firmware -B $FirmwareBuildDir
     cmake --build $FirmwareBuildDir
 

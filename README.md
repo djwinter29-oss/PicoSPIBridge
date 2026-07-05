@@ -16,11 +16,11 @@ The implementation uses:
 
 - PIO to sample MOSI on SCK rising edges
 - Active-low chip select gating so capture starts only during transfers
-- DMA to move captured bytes out of the PIO RX FIFO in fixed blocks
-- A software ring buffer to decouple capture from USB transmission
-- TinyUSB CDC to stream binary data to the host PC
+- Chained ping-pong DMA targets that write directly into reserved ring-buffer spans
+- A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
+- TinyUSB CDC to stream binary data to the host PC with short-packet-aware flush behavior
 
-The current scaffold uses 64-byte DMA blocks to keep IRQ load low enough for at least 5 MHz SPI capture, flushes partial blocks when chip select releases so short transfers still reach the CDC stream, and keeps a larger ring buffer so USB startup has more headroom before traffic would be dropped.
+The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the CDC stream without aborting the active DMA transfer, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark.
 
 ## Overview
 
@@ -38,7 +38,7 @@ Key behavior:
 The capture path is:
 
 1. Monitor SPI MOSI traffic on the RP2040
-2. Move incoming data into a DMA/ring buffer path
+2. DMA incoming data directly into reserved ring-buffer spans
 3. Stream the captured bytes over USB CDC as a binary data stream
 4. Let a PC application decode, log, or display the traffic
 
@@ -160,8 +160,11 @@ See `docs/pin-definitions.md` for the pin mapping summary.
 - Host software is expected to understand the binary stream format used by the firmware
 - Because the interface starts streaming on boot, host software should be ready to consume data as soon as the device enumerates
 - The current scaffold discards partial bytes immediately when active-low chip select deasserts, so only selected-transfer data is forwarded
-- The current DMA path is sized for a minimum target of 5 MHz SPI monitoring, assuming the host keeps up with the USB CDC stream
-- The current ring buffer is sized to provide about 100 ms of capture headroom at 5 MHz SPI before USB backpressure would force drops
+- The current DMA and USB buffering path is tuned to reduce per-byte CPU overhead while still targeting at least 5 MHz SPI monitoring, assuming the host keeps up with the USB CDC stream
+- The current ring buffer is sized to provide about 200 ms of capture headroom at 5 MHz SPI before USB backpressure would force drops
+- When the host falls behind badly enough that the ring cannot reserve another DMA span, the firmware keeps capture running and counts the overflow as dropped bytes
+- Runtime counters now track USB write calls, USB bytes written, USB flush calls, overflow-buffer commits, DMA rearms, and ring high-water mark for on-target tuning
+- Host-side tests cover ring publish semantics, USB short-packet flush behavior, and DMA span reservation math without requiring RP2040 hardware
 - `GPIO4` is reserved for possible future MISO monitoring, but MISO capture is not supported right now
 
 ## Status

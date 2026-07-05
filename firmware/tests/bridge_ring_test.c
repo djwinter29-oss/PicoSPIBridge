@@ -107,6 +107,142 @@ static void test_zero_length_operations(void) {
     assert(ring.write_index == 0u);
 }
 
+static void test_peek_and_consume(void) {
+    bridge_ring_t ring;
+    const uint8_t *peek = NULL;
+    uint8_t input[] = {0x31, 0x32, 0x33, 0x34};
+
+    bridge_ring_init(&ring);
+
+    assert(bridge_ring_write(&ring, input, 4) == 4);
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == 4);
+    assert(peek != NULL);
+    assert(peek[0] == 0x31);
+    assert(peek[1] == 0x32);
+    assert(peek[2] == 0x33);
+    assert(peek[3] == 0x34);
+
+    bridge_ring_consume(&ring, 2);
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == 2);
+    assert(peek[0] == 0x33);
+    assert(peek[1] == 0x34);
+}
+
+static void test_peek_wrap_boundary(void) {
+    bridge_ring_t ring;
+    const uint8_t *peek = NULL;
+    uint8_t source = 0;
+    uint8_t input[] = {0xa0, 0xa1, 0xa2, 0xa3};
+    size_t expected_capacity = BRIDGE_RING_SIZE - 1u;
+    size_t index;
+
+    bridge_ring_init(&ring);
+
+    for (index = 0; index < expected_capacity - 2u; ++index) {
+        source = (uint8_t)index;
+        assert(bridge_ring_write(&ring, &source, 1) == 1);
+    }
+
+    for (index = 0; index < expected_capacity - 2u; ++index) {
+        assert(bridge_ring_read(&ring, &source, 1) == 1);
+    }
+
+    assert(bridge_ring_write(&ring, input, 4) == 4);
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == 3);
+    assert(peek[0] == 0xa0);
+    assert(peek[1] == 0xa1);
+    assert(peek[2] == 0xa2);
+
+    bridge_ring_consume(&ring, 3);
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == 1);
+    assert(peek[0] == 0xa3);
+}
+
+static void test_direct_produce(void) {
+    bridge_ring_t ring;
+    const uint8_t *peek = NULL;
+
+    bridge_ring_init(&ring);
+
+    ring.storage[0] = 0xc1;
+    ring.storage[1] = 0xc2;
+    ring.storage[2] = 0xc3;
+
+    bridge_ring_produce(&ring, 3);
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == 3);
+    assert(peek[0] == 0xc1);
+    assert(peek[1] == 0xc2);
+    assert(peek[2] == 0xc3);
+    assert(ring.stats.high_water_mark == 3u);
+}
+
+static void test_direct_produce_wraps(void) {
+    bridge_ring_t ring;
+    const uint8_t *peek = NULL;
+    size_t index;
+
+    bridge_ring_init(&ring);
+    ring.read_index = 3u;
+    ring.write_index = BRIDGE_RING_SIZE - 2u;
+
+    for (index = 0; index < BRIDGE_RING_SIZE - 5u; ++index) {
+        ring.storage[(ring.read_index + index) & (BRIDGE_RING_SIZE - 1u)] = (uint8_t)index;
+    }
+
+    ring.storage[BRIDGE_RING_SIZE - 2u] = 0xd1;
+    ring.storage[BRIDGE_RING_SIZE - 1u] = 0xd2;
+    bridge_ring_produce(&ring, 2);
+
+    assert(bridge_ring_peek_contiguous(&ring, &peek) == BRIDGE_RING_SIZE - 3u);
+    assert(peek[BRIDGE_RING_SIZE - 5u] == 0xd1);
+    assert(peek[BRIDGE_RING_SIZE - 4u] == 0xd2);
+    assert(ring.stats.high_water_mark == BRIDGE_RING_SIZE - 3u);
+}
+
+static void test_high_water_mark_tracks_peak_usage(void) {
+    bridge_ring_t ring;
+    uint8_t input[] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
+
+    bridge_ring_init(&ring);
+
+    assert(bridge_ring_write(&ring, input, 4) == 4);
+    assert(ring.stats.high_water_mark == 4u);
+
+    bridge_ring_consume(&ring, 3);
+    assert(bridge_ring_write(&ring, &input[4], 2) == 2);
+    assert(ring.stats.high_water_mark == 4u);
+
+    assert(bridge_ring_write(&ring, input, 3) == 3);
+    assert(ring.stats.high_water_mark == 6u);
+}
+
+static void test_strict_publish_updates_high_water_mark(void) {
+    bridge_ring_t ring;
+
+    bridge_ring_init(&ring);
+
+    ring.storage[0] = 0xe1;
+    ring.storage[1] = 0xe2;
+    ring.storage[2] = 0xe3;
+
+    bridge_ring_publish(&ring, 3u);
+    assert(ring.write_index == 3u);
+    assert(ring.stats.high_water_mark == 3u);
+}
+
+static void test_strict_publish_records_invariant_failure(void) {
+    bridge_ring_t ring;
+
+    bridge_ring_init(&ring);
+    ring.read_index = 1u;
+    ring.write_index = 0u;
+
+    bridge_ring_publish(&ring, BRIDGE_RING_SIZE - 1u);
+    assert(ring.write_index == 0u);
+    assert(ring.stats.publish_invariant_failures == 1u);
+    assert(ring.dropped_bytes == BRIDGE_RING_SIZE - 1u);
+}
+
 static void test_wraparound(void) {
     bridge_ring_t ring;
     uint8_t source = 0x5a;
@@ -136,6 +272,13 @@ int main(void) {
     test_partial_write_when_near_full();
     test_fifo_order_across_wrap();
     test_zero_length_operations();
+    test_peek_and_consume();
+    test_peek_wrap_boundary();
+    test_direct_produce();
+    test_direct_produce_wraps();
+    test_high_water_mark_tracks_peak_usage();
+    test_strict_publish_updates_high_water_mark();
+    test_strict_publish_records_invariant_failure();
     test_wraparound();
     return 0;
 }

@@ -1,53 +1,163 @@
 #include "hardware/dma.h"
 #include "hardware/irq.h"
 #include "hardware/pio.h"
+#include "hardware/sync.h"
 #include "pico/stdlib.h"
 
 #include "bridge_config.h"
 #include "bridge_ring.h"
+#include "capture_dma_plan.h"
 #include "spi_capture.h"
 #include "spi_mosi_sniffer.pio.h"
 
 typedef struct {
+    volatile uint32_t active_block_index;
+    volatile uint32_t flushed_counts[2];
+} spi_capture_shared_state_t;
+
+typedef struct {
+    uint8_t *destination;
+    uint32_t transfer_count;
+    bool drop_on_commit;
+    bool overflow_counted;
+} spi_capture_dma_target_t;
+
+typedef struct {
     PIO pio;
     uint sm;
-    uint dma_channel;
+    uint dma_channels[2];
     bridge_ring_t *ring;
-    uint8_t dma_block[BRIDGE_DMA_BLOCK_SIZE];
+    spi_capture_shared_state_t shared;
+    uint32_t reserved_write_index;
+    spi_capture_dma_target_t dma_targets[2];
+    uint8_t overflow_blocks[2][BRIDGE_DMA_BLOCK_SIZE];
 } spi_capture_state_t;
 
 static spi_capture_state_t capture;
 
-static void spi_capture_arm_dma(void) {
-    dma_channel_set_write_addr(capture.dma_channel, capture.dma_block, false);
-    dma_channel_set_trans_count(capture.dma_channel, BRIDGE_DMA_BLOCK_SIZE, true);
-}
+typedef struct {
+    uint block_index;
+    uint dma_channel;
+    uint32_t transfer_count;
+    uint32_t flushed_count;
+    uint32_t remaining_count;
+} spi_capture_snapshot_t;
 
-static void spi_capture_commit_bytes(size_t count) {
-    size_t written = bridge_ring_write(capture.ring, capture.dma_block, count);
-    capture.ring->dropped_bytes += (uint32_t)(count - written);
-}
+static void spi_capture_assign_dma_target(uint block_index) {
+    capture_dma_plan_t plan = capture_dma_plan_target(capture.reserved_write_index, capture.ring->read_index);
 
-static void spi_capture_dma_irq_handler(void) {
-    uint32_t dma_mask = 1u << capture.dma_channel;
-
-    if ((dma_hw->ints0 & dma_mask) == 0u) {
+    if (plan.drop_on_commit) {
+        capture.dma_targets[block_index].destination = capture.overflow_blocks[block_index];
+        capture.dma_targets[block_index].transfer_count = plan.transfer_count;
+        capture.dma_targets[block_index].drop_on_commit = true;
+        capture.dma_targets[block_index].overflow_counted = false;
         return;
     }
 
-    dma_hw->ints0 = dma_mask;
+    capture.dma_targets[block_index].destination = &capture.ring->storage[capture.reserved_write_index];
+    capture.dma_targets[block_index].transfer_count = plan.transfer_count;
+    capture.dma_targets[block_index].drop_on_commit = false;
+    capture.dma_targets[block_index].overflow_counted = false;
+    capture.reserved_write_index = plan.next_reserved_write_index;
+}
 
-    spi_capture_commit_bytes(BRIDGE_DMA_BLOCK_SIZE);
-    spi_capture_arm_dma();
+static void spi_capture_configure_dma_channel(uint block_index, bool trigger) {
+    dma_channel_config dma_config = dma_channel_get_default_config(capture.dma_channels[block_index]);
+
+    spi_capture_assign_dma_target(block_index);
+
+    channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
+    channel_config_set_read_increment(&dma_config, false);
+    channel_config_set_write_increment(&dma_config, true);
+    channel_config_set_dreq(&dma_config, pio_get_dreq(capture.pio, capture.sm, false));
+    channel_config_set_chain_to(&dma_config, capture.dma_channels[block_index ^ 1u]);
+
+    dma_channel_configure(
+        capture.dma_channels[block_index],
+        &dma_config,
+        capture.dma_targets[block_index].destination,
+        &capture.pio->rxf[capture.sm],
+        capture.dma_targets[block_index].transfer_count,
+        trigger
+    );
+}
+
+static void spi_capture_publish_bytes_from_block(uint block_index, uint32_t count) {
+    if (count == 0u) {
+        return;
+    }
+
+    if (capture.dma_targets[block_index].drop_on_commit) {
+        if (capture_overflow_note_commit(&capture.dma_targets[block_index].overflow_counted)) {
+            capture.ring->stats.overflow_commits += 1u;
+        }
+        capture.ring->dropped_bytes += count;
+        return;
+    }
+
+    bridge_ring_publish(capture.ring, count);
+}
+
+static bool spi_capture_snapshot_active_dma_state(spi_capture_snapshot_t *snapshot, uint32_t *irq_state) {
+    *irq_state = save_and_disable_interrupts();
+
+    if (!gpio_get(PICO_SPI_BRIDGE_CS_PIN)) {
+        restore_interrupts(*irq_state);
+        return false;
+    }
+
+    if (!pio_sm_is_rx_fifo_empty(capture.pio, capture.sm)) {
+        restore_interrupts(*irq_state);
+        return false;
+    }
+
+    snapshot->block_index = capture.shared.active_block_index;
+    snapshot->dma_channel = capture.dma_channels[snapshot->block_index];
+    snapshot->transfer_count = capture.dma_targets[snapshot->block_index].transfer_count;
+    snapshot->flushed_count = capture.shared.flushed_counts[snapshot->block_index];
+    snapshot->remaining_count = dma_hw->ch[snapshot->dma_channel].transfer_count;
+
+    if ((snapshot->remaining_count == 0u) || (snapshot->remaining_count == snapshot->transfer_count)) {
+        restore_interrupts(*irq_state);
+        return false;
+    }
+
+    return true;
+}
+
+static void spi_capture_dma_irq_handler(void) {
+    uint32_t pending = dma_hw->ints0;
+    uint block_index;
+
+    for (block_index = 0u; block_index < 2u; ++block_index) {
+        uint32_t dma_mask = 1u << capture.dma_channels[block_index];
+        size_t ready_count;
+
+        if ((pending & dma_mask) == 0u) {
+            continue;
+        }
+
+        dma_hw->ints0 = dma_mask;
+
+        ready_count = capture.dma_targets[block_index].transfer_count - capture.shared.flushed_counts[block_index];
+        if (ready_count != 0u) {
+            spi_capture_publish_bytes_from_block(block_index, (uint32_t)ready_count);
+        }
+
+        capture.shared.flushed_counts[block_index] = 0u;
+        capture.shared.active_block_index = block_index ^ 1u;
+        spi_capture_configure_dma_channel(block_index, false);
+        capture.ring->stats.dma_rearm_count += 1u;
+    }
 }
 
 void spi_capture_init(const spi_capture_config_t *config) {
     uint offset;
-    dma_channel_config dma_config;
 
     capture.ring = config->ring;
     capture.pio = pio0;
     capture.sm = (uint)pio_claim_unused_sm(capture.pio, true);
+    capture.reserved_write_index = capture.ring->write_index;
 
     pio_gpio_init(capture.pio, PICO_SPI_BRIDGE_SCK_PIN);
     pio_gpio_init(capture.pio, PICO_SPI_BRIDGE_MOSI_PIN);
@@ -66,55 +176,48 @@ void spi_capture_init(const spi_capture_config_t *config) {
     // That is acceptable for a minimal bridge; add host-visible framing if transfer boundaries matter downstream.
     spi_mosi_sniffer_program_init(capture.pio, capture.sm, offset);
 
-    capture.dma_channel = (uint)dma_claim_unused_channel(true);
-    dma_config = dma_channel_get_default_config(capture.dma_channel);
-    channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
-    channel_config_set_read_increment(&dma_config, false);
-    channel_config_set_write_increment(&dma_config, true);
-    channel_config_set_dreq(&dma_config, pio_get_dreq(capture.pio, capture.sm, false));
-    dma_channel_configure(
-        capture.dma_channel,
-        &dma_config,
-        capture.dma_block,
-        &capture.pio->rxf[capture.sm],
-        BRIDGE_DMA_BLOCK_SIZE,
-        false
-    );
+    capture.dma_channels[0] = (uint)dma_claim_unused_channel(true);
+    capture.dma_channels[1] = (uint)dma_claim_unused_channel(true);
 
-    dma_channel_set_irq0_enabled(capture.dma_channel, true);
+    spi_capture_configure_dma_channel(0u, false);
+    spi_capture_configure_dma_channel(1u, false);
+
+    dma_channel_set_irq0_enabled(capture.dma_channels[0], true);
+    dma_channel_set_irq0_enabled(capture.dma_channels[1], true);
     irq_set_exclusive_handler(DMA_IRQ_0, spi_capture_dma_irq_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 
-    // ponytail: A 64-byte DMA block cuts IRQ load enough to make 5 MHz SPI practical on RP2040.
-    // The ceiling is that short transfers can sit in the active DMA block until CS releases.
-    // That is acceptable here because the main loop flushes partial blocks on CS high.
-    spi_capture_arm_dma();
+    // ponytail: Two chained 4 KB DMA buffers spend more SRAM to reduce full-block recycle frequency.
+    // The ceiling is that short transfers still require foreground partial-buffer flushes on CS high.
+    // That is acceptable here; move framing into hardware if that foreground flush becomes the limit.
+    capture.shared.active_block_index = 0u;
+    capture.shared.flushed_counts[0] = 0u;
+    capture.shared.flushed_counts[1] = 0u;
+    dma_start_channel_mask(1u << capture.dma_channels[0]);
 }
 
 void spi_capture_poll(void) {
-    uint32_t remaining;
-    size_t captured;
+    uint32_t irq_state;
+    spi_capture_snapshot_t snapshot;
+    uint32_t captured;
+    uint32_t ready_count;
 
-    if (!gpio_get(PICO_SPI_BRIDGE_CS_PIN)) {
+    if (!spi_capture_snapshot_active_dma_state(&snapshot, &irq_state)) {
         return;
     }
 
-    if (!pio_sm_is_rx_fifo_empty(capture.pio, capture.sm)) {
+    captured = snapshot.transfer_count - snapshot.remaining_count;
+    if (captured <= snapshot.flushed_count) {
+        restore_interrupts(irq_state);
         return;
     }
 
-    remaining = dma_hw->ch[capture.dma_channel].transfer_count;
-    if ((remaining == 0u) || (remaining == BRIDGE_DMA_BLOCK_SIZE)) {
-        return;
-    }
+    ready_count = captured - snapshot.flushed_count;
 
-    dma_channel_abort(capture.dma_channel);
-    remaining = dma_hw->ch[capture.dma_channel].transfer_count;
-    captured = BRIDGE_DMA_BLOCK_SIZE - (size_t)remaining;
-
-    if (captured != 0u) {
-        spi_capture_commit_bytes(captured);
-    }
-
-    spi_capture_arm_dma();
+    // ponytail: Tail flushes still keep IRQs masked while publishing bytes so partial commits stay ordered with DMA completions.
+    // The ceiling is extra interrupt latency during CS-high publish operations.
+    // That is acceptable for now because the payload is already in the ring; move the consumer off-core if publish latency becomes the limit.
+    spi_capture_publish_bytes_from_block(snapshot.block_index, ready_count);
+    capture.shared.flushed_counts[snapshot.block_index] = captured;
+    restore_interrupts(irq_state);
 }
