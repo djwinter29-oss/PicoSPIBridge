@@ -14,29 +14,17 @@ static void bridge_init_system_clock(void) {
     hard_assert(set_sys_clock_khz(160000u, true));
 }
 
-static void bridge_cs_led_irq(uint gpio, uint32_t events) {
-    (void)events;
-
-#ifdef PICO_DEFAULT_LED_PIN
-    if (gpio == PICO_SPI_BRIDGE_CS_PIN) {
-        gpio_put(PICO_DEFAULT_LED_PIN, !gpio_get(PICO_SPI_BRIDGE_CS_PIN));
-    }
-#else
-    (void)gpio;
-#endif
-}
-
 static void bridge_init_status_led(void) {
 #ifdef PICO_DEFAULT_LED_PIN
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
     gpio_put(PICO_DEFAULT_LED_PIN, 0);
-    gpio_set_irq_enabled_with_callback(
-        PICO_SPI_BRIDGE_CS_PIN,
-        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL,
-        true,
-        &bridge_cs_led_irq
-    );
+#endif
+}
+
+static void bridge_update_status_led(void) {
+#ifdef PICO_DEFAULT_LED_PIN
+    gpio_put(PICO_DEFAULT_LED_PIN, !gpio_get(PICO_SPI_BRIDGE_CS_PIN));
 #endif
 }
 
@@ -57,6 +45,7 @@ int main(void) {
         tud_task();
         spi_capture_poll();
         usb_stream_poll(&bridge_ring);
+        bridge_update_status_led();
         tight_loop_contents();
     }
 }
