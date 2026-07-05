@@ -117,6 +117,25 @@ static void test_short_tail_flushes(void) {
     assert(ring.stats.usb_flush_calls == 1u);
 }
 
+static void test_full_tx_budget_flushes_during_continuous_stream(void) {
+    bridge_ring_t ring;
+
+    bridge_ring_init(&ring);
+    reset_usb_stub();
+    fill_ring(&ring, BRIDGE_USB_CHUNK_SIZE * 2u);
+
+    usb_stream_poll(&ring);
+
+    assert(stub_write_calls == 1u);
+    assert(stub_available_calls == 1u);
+    assert(stub_flush_calls == 1u);
+    assert(stub_last_write_size == BRIDGE_USB_CHUNK_SIZE);
+    assert(ring.stats.usb_write_calls == 1u);
+    assert(ring.stats.usb_bytes_written == BRIDGE_USB_CHUNK_SIZE);
+    assert(ring.stats.usb_flush_calls == 1u);
+    assert(((ring.write_index - ring.read_index) & (BRIDGE_RING_SIZE - 1u)) == BRIDGE_USB_CHUNK_SIZE);
+}
+
 static void test_partial_write_flushes_short_tail_and_keeps_remaining_data(void) {
     bridge_ring_t ring;
 
@@ -140,6 +159,7 @@ static void test_partial_write_flushes_short_tail_and_keeps_remaining_data(void)
 int main(void) {
     test_full_packet_flushes_when_batch_drains_ring();
     test_short_tail_flushes();
+    test_full_tx_budget_flushes_during_continuous_stream();
     test_partial_write_flushes_short_tail_and_keeps_remaining_data();
     return 0;
 }

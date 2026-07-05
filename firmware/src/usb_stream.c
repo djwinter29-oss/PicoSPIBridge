@@ -40,7 +40,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
         size_t remaining_used;
 
         if (available_budget == 0u) {
-            should_flush = usb_stream_has_short_packet_tail(total_written);
+            should_flush = total_written != 0u;
             break;
         }
 
@@ -72,7 +72,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
         remaining_used = (size_t)((ring->write_index - ring->read_index) & (BRIDGE_RING_SIZE - 1u));
 
         if (written != write_size) {
-            should_flush = usb_stream_has_short_packet_tail(total_written);
+            should_flush = total_written != 0u;
             break;
         }
 
