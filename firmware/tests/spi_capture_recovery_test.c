@@ -16,10 +16,12 @@ mock_dma_hw_t *dma_hw = &mock_dma_hw;
 unsigned int mock_dma_next_channel = 0u;
 volatile void *mock_dma_write_addresses[16] = {0};
 uint32_t mock_dma_configure_transfer_counts[16] = {0};
+uint32_t mock_dma_abort_calls[16] = {0};
 void (*mock_dma_irq0_handler)(void) = 0;
 mock_pio_hw_t mock_pio0_hw = {{0}};
 PIO pio0 = &mock_pio0_hw;
 bool mock_gpio_values[32] = {0};
+uint32_t mock_spi_mosi_sniffer_init_calls = 0u;
 
 static void set_cs_level(bool high) {
     mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = high;
@@ -44,6 +46,7 @@ int main(void) {
     });
 
     assert(mock_dma_irq0_handler != 0);
+    assert(mock_spi_mosi_sniffer_init_calls == 1u);
     assert(mock_dma_configure_transfer_counts[0] == BRIDGE_DMA_BLOCK_SIZE);
     assert(mock_dma_configure_transfer_counts[1] == BRIDGE_DMA_BLOCK_SIZE);
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
@@ -56,33 +59,43 @@ int main(void) {
     mock_dma_irq0_handler();
 
     assert(ring.stats.publish_invariant_failures == 1u);
-    assert(!address_in_ring(&ring, mock_dma_write_addresses[0]));
+    assert(mock_dma_abort_calls[0] == 1u);
+    assert(mock_dma_abort_calls[1] == 1u);
+    assert(mock_spi_mosi_sniffer_init_calls == 2u);
 
     ring.read_index = (BRIDGE_DMA_BLOCK_SIZE * 2u) + 1u;
     dma_hw->ints0 = 1u << 1;
     dma_hw->ch[1].transfer_count = 0u;
     mock_dma_irq0_handler();
 
-    assert(ring.write_index == BRIDGE_DMA_BLOCK_SIZE);
-
-    set_cs_level(true);
-    spi_capture_poll();
-    set_cs_level(false);
-
-    assert(!address_in_ring(&ring, mock_dma_write_addresses[0]));
-    assert(ring.usb_flush_boundary_count == 0u);
-
-    dma_hw->ints0 = 1u << 0;
-    dma_hw->ch[0].transfer_count = 0u;
-    mock_dma_irq0_handler();
-
-    assert(!address_in_ring(&ring, mock_dma_write_addresses[0]));
+    assert(ring.write_index == 0u);
 
     set_cs_level(true);
     spi_capture_poll();
     set_cs_level(false);
 
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
+    assert(mock_spi_mosi_sniffer_init_calls == 3u);
+    assert(ring.usb_flush_boundary_count == 0u);
+
+    ring.read_index = 1u;
+    dma_hw->ch[0].transfer_count = BRIDGE_DMA_BLOCK_SIZE - 3u;
+    set_cs_level(true);
+    spi_capture_poll();
+    set_cs_level(false);
+
+    assert(mock_dma_abort_calls[0] == 2u);
+    assert(mock_dma_abort_calls[1] == 2u);
+    assert(mock_spi_mosi_sniffer_init_calls == 4u);
+    assert(ring.write_index == 0u);
+
+    ring.read_index = (BRIDGE_DMA_BLOCK_SIZE * 2u) + 1u;
+    set_cs_level(true);
+    spi_capture_poll();
+    set_cs_level(false);
+
+    assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
+    assert(mock_spi_mosi_sniffer_init_calls == 5u);
 
     dma_hw->ch[0].transfer_count = BRIDGE_DMA_BLOCK_SIZE - 3u;
     set_cs_level(true);

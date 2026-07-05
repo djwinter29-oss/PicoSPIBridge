@@ -20,7 +20,7 @@ The implementation uses:
 - A software ring buffer to decouple capture from USB transmission and absorb USB backpressure
 - TinyUSB CDC transport to stream captured bytes to the host PC
 
-The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, tracks pending chip-select-release boundaries directly in the buffered data so final boundary flushes survive partial USB writes and dense buffered bursts without a small fixed queue limit, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
+The current scaffold uses chained ping-pong DMA reservations of up to 4 KB each to reduce IRQ overhead, flushes partial blocks when chip select releases so short transfers still reach the USB stream without aborting the active DMA transfer, tracks pending chip-select-release boundaries directly in the buffered data so final boundary flushes survive partial USB writes and dense buffered bursts without a small fixed queue limit, resets the sniffer back to its idle wait state after recovery so capture resumes only on the next chip-select assertion, falls back to scratch overflow buffers only when the ring has no free reservation space, and keeps lightweight runtime counters for USB writes, USB flushes, overflow-buffer commits, DMA rearms, and ring high-water mark for on-device debugging and future tuning.
 
 ## Overview
 
@@ -68,7 +68,7 @@ During continuous traffic, the firmware favors throughput and does not force ext
 
 The bridge does not try to infer protocol-level message boundaries for the host. Host software is expected to determine SPI or application framing from the captured payload bytes themselves.
 
-When the host falls behind or the capture path overruns available buffering, the firmware may drop bytes to keep forwarding the newest capture data. Those drops are tracked in device-side counters only; they are not signaled inline in the byte stream, and the current firmware does not export those counters back to the host. After an overrun, the firmware remains in recovery until the foreground loop sees chip select high and resets the capture path, so very short gaps may still be skipped as part of the best-effort model.
+When the host falls behind or the capture path overruns available buffering, the firmware may drop bytes to keep forwarding the newest capture data. Those drops are tracked in device-side counters only; they are not signaled inline in the byte stream, and the current firmware does not export those counters back to the host. After an overrun, the firmware remains in recovery until the foreground loop sees chip select high, resets the sniffer to its idle wait-for-chip-select state, and rearms capture for the next fresh chip-select assertion. The transfer active during recovery may be skipped as part of the best-effort model, but resumed capture starts at a clean transfer boundary.
 
 ## Typical Use
 

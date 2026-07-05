@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     PIO pio;
     uint sm;
+    uint program_offset;
     uint dma_channels[2];
     bridge_ring_t *ring;
     spi_capture_shared_state_t shared;
@@ -52,6 +53,37 @@ static void spi_capture_configure_dma_channel(uint block_index, bool trigger);
 static bool spi_capture_recovery_boundary_ready(void);
 static void spi_capture_restart_dma_after_recovery(void);
 static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t count);
+static void spi_capture_enter_recovery(void);
+
+static void spi_capture_reset_sniffer_to_wait_cs_low(void) {
+    spi_mosi_sniffer_program_init(capture.pio, capture.sm, capture.program_offset);
+}
+
+static void spi_capture_abort_dma_for_recovery(void) {
+    uint block_index;
+
+    for (block_index = 0u; block_index < 2u; ++block_index) {
+        dma_channel_abort(capture.dma_channels[block_index]);
+        capture.dma_targets[block_index].dma_armed = false;
+        capture.dma_targets[block_index].drop_on_commit = true;
+        capture.dma_targets[block_index].ring_reserved = false;
+    }
+
+    capture.shared.flushed_counts[0] = 0u;
+    capture.shared.flushed_counts[1] = 0u;
+    capture.recovery_quiescing = false;
+    capture.recovery_resume_pending = true;
+}
+
+static void spi_capture_enter_recovery(void) {
+    if (capture.recovery_active) {
+        return;
+    }
+
+    capture.recovery_active = true;
+    spi_capture_reset_sniffer_to_wait_cs_low();
+    spi_capture_abort_dma_for_recovery();
+}
 
 static bool spi_capture_all_dma_idle(void) {
     return !capture.dma_targets[0].dma_armed && !capture.dma_targets[1].dma_armed;
@@ -71,6 +103,9 @@ static void spi_capture_restart_dma_after_recovery(void) {
     capture.shared.active_block_index = 0u;
     capture.shared.flushed_counts[0] = 0u;
     capture.shared.flushed_counts[1] = 0u;
+
+    // Reset the sniffer to its idle wait state so resumed capture starts on the next CS-low assertion.
+    spi_capture_reset_sniffer_to_wait_cs_low();
 
     spi_capture_configure_dma_channel(0u, false);
     spi_capture_configure_dma_channel(1u, false);
@@ -169,6 +204,11 @@ static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t coun
         return false;
     }
 
+    if (capture.recovery_active) {
+        capture.ring->dropped_bytes += count;
+        return false;
+    }
+
     if (capture.dma_targets[block_index].drop_on_commit) {
         if (capture_overflow_note_commit(&capture.dma_targets[block_index].overflow_counted)) {
             capture.ring->stats.overflow_commits += 1u;
@@ -178,7 +218,7 @@ static bool spi_capture_publish_bytes_from_block(uint block_index, uint32_t coun
     }
 
     if (!bridge_ring_publish(capture.ring, count)) {
-        capture.recovery_active = true;
+        spi_capture_enter_recovery();
         return false;
     }
 
@@ -266,11 +306,12 @@ void spi_capture_init(const spi_capture_config_t *config) {
     gpio_disable_pulls(PICO_SPI_BRIDGE_CS_PIN);
 
     offset = pio_add_program(capture.pio, &spi_mosi_sniffer_program);
+    capture.program_offset = offset;
 
     // ponytail: This keeps CS gating in the PIO sampler instead of adding a framed packet layer.
     // The ceiling is that the stream still carries raw bytes without explicit transfer boundary markers.
     // That is acceptable for a minimal bridge; add host-visible framing if transfer boundaries matter downstream.
-    spi_mosi_sniffer_program_init(capture.pio, capture.sm, offset);
+    spi_capture_reset_sniffer_to_wait_cs_low();
 
     capture.dma_channels[0] = (uint)dma_claim_unused_channel(true);
     capture.dma_channels[1] = (uint)dma_claim_unused_channel(true);

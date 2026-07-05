@@ -21,6 +21,7 @@ extern mock_dma_hw_t *dma_hw;
 extern unsigned int mock_dma_next_channel;
 extern volatile void *mock_dma_write_addresses[16];
 extern uint32_t mock_dma_configure_transfer_counts[16];
+extern uint32_t mock_dma_abort_calls[16];
 
 #define DMA_SIZE_8 0u
 
@@ -76,6 +77,11 @@ static inline void dma_channel_set_irq0_enabled(unsigned int channel, bool enabl
 
 static inline void dma_start_channel_mask(uint32_t mask) {
     (void)mask;
+}
+
+static inline void dma_channel_abort(unsigned int channel) {
+    mock_dma_abort_calls[channel] += 1u;
+    dma_hw->ch[channel].transfer_count = 0u;
 }
 
 #endif

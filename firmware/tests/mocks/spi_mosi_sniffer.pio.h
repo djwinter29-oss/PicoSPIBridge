@@ -10,10 +10,13 @@
 
 static const pio_program_t spi_mosi_sniffer_program = {0};
 
+extern uint32_t mock_spi_mosi_sniffer_init_calls;
+
 static inline void spi_mosi_sniffer_program_init(PIO pio, uint sm, uint offset) {
     (void)pio;
     (void)sm;
     (void)offset;
+    mock_spi_mosi_sniffer_init_calls += 1u;
 }
 
 #endif
