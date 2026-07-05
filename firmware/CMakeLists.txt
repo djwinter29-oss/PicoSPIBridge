@@ -13,8 +13,10 @@ add_executable(pico_spi_bridge
     src/main.c
     src/bridge_ring.c
     src/capture/spi_capture.c
+    src/capture/capture_dma_plan.c
     src/capture/spi_mosi_sniffer.pio
     src/usb_stream.c
+    src/usb_descriptors.c
 )
 
 pico_generate_pio_header(

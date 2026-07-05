@@ -6,4 +6,9 @@
 #define BRIDGE_USB_CHUNK_SIZE 1024u
 #define BRIDGE_USB_PACKET_SIZE 64u
 
+#define SCK_PIN 2
+#define MOSI_PIN 3
+#define MISO_PIN 4
+#define CS_PIN 5
+
 #endif
