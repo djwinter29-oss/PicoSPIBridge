@@ -17,11 +17,18 @@ unsigned int mock_dma_next_channel = 0u;
 volatile void *mock_dma_write_addresses[16] = {0};
 uint32_t mock_dma_configure_transfer_counts[16] = {0};
 uint32_t mock_dma_abort_calls[16] = {0};
+uint32_t mock_dma_last_abort_sequence[16] = {0};
 void (*mock_dma_irq0_handler)(void) = 0;
 mock_pio_hw_t mock_pio0_hw = {{0}};
 PIO pio0 = &mock_pio0_hw;
+uint32_t mock_pio_set_enabled_calls = 0u;
+bool mock_pio_sm_enabled = false;
+uint32_t mock_pio_last_disable_sequence = 0u;
+uint32_t mock_pio_clear_fifos_calls = 0u;
 bool mock_gpio_values[32] = {0};
 uint32_t mock_spi_mosi_sniffer_init_calls = 0u;
+uint32_t mock_spi_mosi_sniffer_last_init_sequence = 0u;
+uint32_t mock_call_sequence = 0u;
 
 static void set_cs_level(bool high) {
     mock_gpio_values[PICO_SPI_BRIDGE_CS_PIN] = high;
@@ -37,6 +44,7 @@ static bool address_in_ring(const bridge_ring_t *ring, const volatile void *addr
 
 int main(void) {
     bridge_ring_t ring;
+    uint32_t dropped_before_stale_irq;
 
     set_cs_level(true);
     bridge_ring_init(&ring);
@@ -47,6 +55,7 @@ int main(void) {
 
     assert(mock_dma_irq0_handler != 0);
     assert(mock_spi_mosi_sniffer_init_calls == 1u);
+    assert(mock_pio_sm_enabled == true);
     assert(mock_dma_configure_transfer_counts[0] == BRIDGE_DMA_BLOCK_SIZE);
     assert(mock_dma_configure_transfer_counts[1] == BRIDGE_DMA_BLOCK_SIZE);
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
@@ -61,7 +70,12 @@ int main(void) {
     assert(ring.stats.publish_invariant_failures == 1u);
     assert(mock_dma_abort_calls[0] == 1u);
     assert(mock_dma_abort_calls[1] == 1u);
-    assert(mock_spi_mosi_sniffer_init_calls == 2u);
+    assert(mock_spi_mosi_sniffer_init_calls == 1u);
+    assert(mock_pio_set_enabled_calls == 2u);
+    assert(mock_pio_clear_fifos_calls == 1u);
+    assert(mock_pio_sm_enabled == false);
+    assert(mock_dma_last_abort_sequence[0] < mock_pio_last_disable_sequence);
+    assert(mock_dma_last_abort_sequence[1] < mock_pio_last_disable_sequence);
 
     ring.read_index = (BRIDGE_DMA_BLOCK_SIZE * 2u) + 1u;
     dma_hw->ints0 = 1u << 1;
@@ -75,7 +89,8 @@ int main(void) {
     set_cs_level(false);
 
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
-    assert(mock_spi_mosi_sniffer_init_calls == 3u);
+    assert(mock_spi_mosi_sniffer_init_calls == 2u);
+    assert(mock_pio_sm_enabled == true);
     assert(ring.usb_flush_boundary_count == 0u);
 
     ring.read_index = 1u;
@@ -86,8 +101,18 @@ int main(void) {
 
     assert(mock_dma_abort_calls[0] == 2u);
     assert(mock_dma_abort_calls[1] == 2u);
-    assert(mock_spi_mosi_sniffer_init_calls == 4u);
+    assert(mock_spi_mosi_sniffer_init_calls == 2u);
+    assert(mock_pio_clear_fifos_calls == 2u);
+    assert(mock_pio_sm_enabled == false);
+    assert(mock_dma_last_abort_sequence[0] < mock_pio_last_disable_sequence);
+    assert(mock_dma_last_abort_sequence[1] < mock_pio_last_disable_sequence);
     assert(ring.write_index == 0u);
+
+    dropped_before_stale_irq = ring.dropped_bytes;
+    dma_hw->ints0 = 1u << 0;
+    mock_dma_irq0_handler();
+
+    assert(ring.dropped_bytes == dropped_before_stale_irq);
 
     ring.read_index = (BRIDGE_DMA_BLOCK_SIZE * 2u) + 1u;
     set_cs_level(true);
@@ -95,7 +120,8 @@ int main(void) {
     set_cs_level(false);
 
     assert(address_in_ring(&ring, mock_dma_write_addresses[0]));
-    assert(mock_spi_mosi_sniffer_init_calls == 5u);
+    assert(mock_spi_mosi_sniffer_init_calls == 3u);
+    assert(mock_pio_sm_enabled == true);
 
     dma_hw->ch[0].transfer_count = BRIDGE_DMA_BLOCK_SIZE - 3u;
     set_cs_level(true);

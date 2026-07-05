@@ -22,6 +22,8 @@ extern unsigned int mock_dma_next_channel;
 extern volatile void *mock_dma_write_addresses[16];
 extern uint32_t mock_dma_configure_transfer_counts[16];
 extern uint32_t mock_dma_abort_calls[16];
+extern uint32_t mock_dma_last_abort_sequence[16];
+extern uint32_t mock_call_sequence;
 
 #define DMA_SIZE_8 0u
 
@@ -80,7 +82,9 @@ static inline void dma_start_channel_mask(uint32_t mask) {
 }
 
 static inline void dma_channel_abort(unsigned int channel) {
+    mock_call_sequence += 1u;
     mock_dma_abort_calls[channel] += 1u;
+    mock_dma_last_abort_sequence[channel] = mock_call_sequence;
     dma_hw->ch[channel].transfer_count = 0u;
 }
 

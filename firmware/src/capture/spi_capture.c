@@ -59,15 +59,24 @@ static void spi_capture_reset_sniffer_to_wait_cs_low(void) {
     spi_mosi_sniffer_program_init(capture.pio, capture.sm, capture.program_offset);
 }
 
+static void spi_capture_stop_sniffer_for_recovery(void) {
+    pio_sm_set_enabled(capture.pio, capture.sm, false);
+    pio_sm_clear_fifos(capture.pio, capture.sm);
+}
+
 static void spi_capture_abort_dma_for_recovery(void) {
     uint block_index;
+    uint32_t dma_irq_mask = 0u;
 
     for (block_index = 0u; block_index < 2u; ++block_index) {
+        dma_irq_mask |= 1u << capture.dma_channels[block_index];
         dma_channel_abort(capture.dma_channels[block_index]);
         capture.dma_targets[block_index].dma_armed = false;
         capture.dma_targets[block_index].drop_on_commit = true;
         capture.dma_targets[block_index].ring_reserved = false;
     }
+
+    dma_hw->ints0 = dma_irq_mask;
 
     capture.shared.flushed_counts[0] = 0u;
     capture.shared.flushed_counts[1] = 0u;
@@ -81,8 +90,8 @@ static void spi_capture_enter_recovery(void) {
     }
 
     capture.recovery_active = true;
-    spi_capture_reset_sniffer_to_wait_cs_low();
     spi_capture_abort_dma_for_recovery();
+    spi_capture_stop_sniffer_for_recovery();
 }
 
 static bool spi_capture_all_dma_idle(void) {
@@ -266,6 +275,11 @@ static void spi_capture_dma_irq_handler(void) {
 
         dma_hw->ints0 = dma_mask;
 
+        if (capture.recovery_active && !capture.dma_targets[block_index].dma_armed) {
+            capture.shared.flushed_counts[block_index] = 0u;
+            continue;
+        }
+
         ready_count = capture_completion_ready_bytes(
             capture.dma_targets[block_index].transfer_count,
             capture.shared.flushed_counts[block_index]
@@ -359,7 +373,9 @@ void spi_capture_poll(void) {
     published = spi_capture_publish_bytes_from_block(snapshot.block_index, ready_count);
     if (published) {
         bridge_ring_note_usb_flush_boundary(capture.ring);
+        capture.shared.flushed_counts[snapshot.block_index] = captured;
+    } else if (!capture.recovery_active && capture.dma_targets[snapshot.block_index].drop_on_commit) {
+        capture.shared.flushed_counts[snapshot.block_index] = captured;
     }
-    capture.shared.flushed_counts[snapshot.block_index] = captured;
     restore_interrupts(irq_state);
 }

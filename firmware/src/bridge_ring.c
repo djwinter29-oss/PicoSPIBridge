@@ -75,6 +75,45 @@ static uint32_t bridge_ring_clear_boundary_segment(bridge_ring_t *ring, uint32_t
     return cleared;
 }
 
+static bool bridge_ring_find_boundary_offset_in_segment(const bridge_ring_t *ring, uint32_t start_index, uint32_t count, uint32_t *offset) {
+    uint32_t current = start_index;
+    uint32_t remaining = count;
+    uint32_t scanned = 0u;
+
+    while (remaining != 0u) {
+        uint32_t word_index = bridge_ring_boundary_word_index(current);
+        uint32_t bit_index = current & 31u;
+        uint32_t chunk_bits = 32u - bit_index;
+        uint32_t mask;
+        uint32_t matched;
+        uint32_t relative_bit;
+
+        if (chunk_bits > remaining) {
+            chunk_bits = remaining;
+        }
+
+        mask = bridge_ring_boundary_range_mask(bit_index, chunk_bits);
+        matched = ring->usb_flush_boundary_bits[word_index] & mask;
+        if (matched != 0u) {
+            relative_bit = bit_index;
+            while ((matched & (1u << relative_bit)) == 0u) {
+                relative_bit += 1u;
+            }
+
+            if (offset != NULL) {
+                *offset = scanned + (relative_bit - bit_index);
+            }
+            return true;
+        }
+
+        current = (current + chunk_bits) & (BRIDGE_RING_SIZE - 1u);
+        scanned += chunk_bits;
+        remaining -= chunk_bits;
+    }
+
+    return false;
+}
+
 static bool bridge_ring_clear_consumed_boundaries(bridge_ring_t *ring, uint32_t start_index, size_t count) {
     uint32_t cleared = 0u;
 
@@ -187,6 +226,17 @@ size_t bridge_ring_peek_contiguous(const bridge_ring_t *ring, const uint8_t **so
     }
 
     return contiguous;
+}
+
+size_t bridge_ring_peek_contiguous_up_to_usb_flush_boundary(const bridge_ring_t *ring, const uint8_t **source) {
+    size_t contiguous = bridge_ring_peek_contiguous(ring, source);
+    uint32_t boundary_offset;
+
+    if ((contiguous == 0u) || !bridge_ring_find_boundary_offset_in_segment(ring, ring->read_index, (uint32_t)contiguous, &boundary_offset)) {
+        return contiguous;
+    }
+
+    return (size_t)boundary_offset + 1u;
 }
 
 void bridge_ring_produce(bridge_ring_t *ring, size_t count) {

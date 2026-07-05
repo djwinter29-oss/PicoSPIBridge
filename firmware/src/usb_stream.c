@@ -51,7 +51,7 @@ void usb_stream_poll(bridge_ring_t *ring) {
         }
 
         {
-            size_t available_count = bridge_ring_peek_contiguous(ring, &chunk);
+            size_t available_count = bridge_ring_peek_contiguous_up_to_usb_flush_boundary(ring, &chunk);
             if (count > available_count) {
                 count = available_count;
             }

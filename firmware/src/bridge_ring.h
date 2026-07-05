@@ -40,6 +40,7 @@ void bridge_ring_init(bridge_ring_t *ring);
 size_t bridge_ring_write(bridge_ring_t *ring, const uint8_t *source, size_t count);
 size_t bridge_ring_read(bridge_ring_t *ring, uint8_t *destination, size_t count);
 size_t bridge_ring_peek_contiguous(const bridge_ring_t *ring, const uint8_t **source);
+size_t bridge_ring_peek_contiguous_up_to_usb_flush_boundary(const bridge_ring_t *ring, const uint8_t **source);
 bool bridge_ring_publish(bridge_ring_t *ring, size_t count);
 void bridge_ring_produce(bridge_ring_t *ring, size_t count);
 void bridge_ring_consume(bridge_ring_t *ring, size_t count);
