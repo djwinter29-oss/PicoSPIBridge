@@ -1,36 +1,34 @@
 param(
     [string]$FirmwareBuildDir = "build/firmware",
-    [string]$OpenOcdExe = "openocd",
-    [int]$AdapterSpeedKhz = 5000,
+    [string]$OpenOcdExe,
+    [int]$AdapterSpeedKhz,
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
 
-function Invoke-NativeCommand {
-    param(
-        [string]$Description,
-        [scriptblock]$Command
-    )
+. (Join-Path $PSScriptRoot "common.ps1")
 
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
-    }
-}
-
-. (Join-Path $PSScriptRoot "Import-VsDevEnvironment.ps1")
-
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
+$repoRoot = Get-RepoRoot
 $elfPath = Join-Path $repoRoot "$FirmwareBuildDir/pico_spi_bridge.elf"
 
 Push-Location $repoRoot
 try {
+    Import-RepoWindowsEnvironment
+
+    if (-not $PSBoundParameters.ContainsKey("OpenOcdExe")) {
+        $OpenOcdExe = if ($env:PICO_OPENOCD_EXE) { $env:PICO_OPENOCD_EXE } else { "openocd" }
+    }
+
+    if (-not $PSBoundParameters.ContainsKey("AdapterSpeedKhz")) {
+        $AdapterSpeedKhz = if ($env:PICO_DEBUG_PROBE_SPEED_KHZ) { [int]$env:PICO_DEBUG_PROBE_SPEED_KHZ } else { 5000 }
+    }
+
     if (-not $SkipBuild) {
-        Import-VsDevEnvironment
+        Initialize-BuildEnvironment
 
         if (-not $env:PICO_SDK_PATH) {
-            throw "PICO_SDK_PATH is not set. Set it before running tools/windows/load.ps1, or pass -SkipBuild to program an existing ELF."
+            throw "PICO_SDK_PATH is not set. Export it in your shell or set it in tools/windows/.env.ps1, or pass -SkipBuild to program an existing ELF."
         }
 
         Invoke-NativeCommand "Firmware configure" { cmake -S firmware -B $FirmwareBuildDir }

@@ -137,12 +137,13 @@ The repository includes host-side unit tests for the ring buffer, DMA span plann
 	ctest --test-dir build/tests -C Debug --output-on-failure
 	```
 
-On Windows, `tools/windows/test.ps1` is the simplest way to run validation because it bootstraps the Visual Studio developer environment, builds the Pico firmware, and then runs the host tests. If you only want the host-side tests on a machine without the Pico SDK, pass `-SkipFirmwareBuild`.
+On Windows, `tools/windows/test.ps1` is the simplest way to run validation because it loads optional defaults from `tools/windows/.env.ps1`, bootstraps the Visual Studio developer environment if needed, builds the Pico firmware, and then runs the host tests. If you only want the host-side tests on a machine without the Pico SDK, pass `-SkipFirmwareBuild`.
 
 ## Tool Scripts
 
 Helper scripts are provided under `tools/` for both Windows and Linux:
 
+- `tools/windows/.env.ps1` is an optional per-machine settings file used by the Windows scripts; create it locally to pin `PICO_SDK_PATH`, `PICO_VSDEVCMD`, OpenOCD defaults, or `CMAKE_GENERATOR` without editing the scripts
 - `tools/windows/build.ps1` configures and builds firmware plus host tests
 - `tools/windows/load.ps1` builds the firmware and programs the ELF over a Raspberry Pi Debug Probe using OpenOCD; pass `-SkipBuild` to reuse an existing ELF or `-OpenOcdExe` to override the OpenOCD command
 - `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest` by default; pass `-SkipFirmwareBuild` for host-only validation

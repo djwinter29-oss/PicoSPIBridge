@@ -5,25 +5,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Invoke-NativeCommand {
-    param(
-        [string]$Description,
-        [scriptblock]$Command
-    )
+. (Join-Path $PSScriptRoot "common.ps1")
 
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
-    }
-}
-
-. (Join-Path $PSScriptRoot "Import-VsDevEnvironment.ps1")
-
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
+$repoRoot = Get-RepoRoot
 
 Push-Location $repoRoot
 try {
-    Import-VsDevEnvironment
+    Initialize-BuildEnvironment
 
     $coverageCompiler = Get-Command clang -ErrorAction SilentlyContinue
     if (-not $coverageCompiler) {
