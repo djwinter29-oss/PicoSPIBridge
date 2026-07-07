@@ -148,12 +148,16 @@ Helper scripts are provided under `tools/` for both Windows and Linux:
 - `tools/windows/load.ps1` builds the firmware and programs the ELF over a Raspberry Pi Debug Probe using OpenOCD; pass `-SkipBuild` to reuse an existing ELF or `-OpenOcdExe` to override the OpenOCD command
 - `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest` by default; pass `-SkipFirmwareBuild` for host-only validation
 - `tools/windows/coverage.ps1` builds host tests with coverage instrumentation and writes reports under `build/coverage`
+- `tools/spi_tx.py` sends one or more 1-5 MB payloads out on Raspberry Pi `spi0.0` at a requested SPI clock using a fixed built-in `byte_offset % 256` pattern
+- `tools/cdc_rx.py` reads the PicoSPIBridge USB CDC stream on Windows or Linux until 100 ms of idle time, reports received bytes plus throughput from first byte to last byte, and validates the first mismatched byte against the same fixed `byte_offset % 256` pattern without importing `tools/spi_tx.py`
 - `tools/linux/build.sh` configures and builds firmware plus host tests
 - `tools/linux/load.sh` builds the firmware and programs the ELF over a Raspberry Pi Debug Probe using OpenOCD; set `OPENOCD_EXE` or `PICO_DEBUG_PROBE_SPEED_KHZ` to override the default OpenOCD command or adapter speed
 - `tools/linux/test.sh` builds the firmware, rebuilds the host tests, and runs `ctest`
 - `tools/linux/coverage.sh` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 
 Coverage scripts require `gcovr` and a GCC- or Clang-based host compiler.
+
+The Raspberry Pi SPI helper scripts require `python3-spidev` and assume the Pi SPI interface is already enabled.
 
 ## Project Structure
 
