@@ -148,7 +148,7 @@ def read_capture(
             now = time.monotonic()
             if not chunk:
                 if first_byte_time is None:
-                    break
+                    continue
                 if last_byte_time is not None and now - last_byte_time >= IDLE_TIMEOUT_S:
                     break
                 continue
