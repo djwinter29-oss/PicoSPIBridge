@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "bridge_config.h"
 #include "capture_dma_plan.h"

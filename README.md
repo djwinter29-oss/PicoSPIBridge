@@ -97,7 +97,23 @@ This project uses the Raspberry Pi Pico SDK.
 	cmake --build build/firmware
 	```
 
-5. Flash the generated UF2 file from `build/firmware` to the RP2040 board
+5. Connect the Raspberry Pi Debug Probe to the target Pico SWD pins and USB
+
+6. Load the firmware:
+
+	Linux:
+
+	```bash
+	tools/linux/load.sh
+	```
+
+	Windows:
+
+	```powershell
+	tools/windows/load.ps1
+	```
+
+7. Install `openocd` on the host and make sure the Debug Probe enumerates as a CMSIS-DAP adapter before running the load script
 
 ## Unit Tests
 
@@ -128,9 +144,11 @@ On Windows, `tools/windows/test.ps1` is the simplest way to run validation becau
 Helper scripts are provided under `tools/` for both Windows and Linux:
 
 - `tools/windows/build.ps1` configures and builds firmware plus host tests
+- `tools/windows/load.ps1` builds the firmware and programs the ELF over a Raspberry Pi Debug Probe using OpenOCD; pass `-SkipBuild` to reuse an existing ELF or `-OpenOcdExe` to override the OpenOCD command
 - `tools/windows/test.ps1` builds the firmware, rebuilds the host tests, and runs `ctest` by default; pass `-SkipFirmwareBuild` for host-only validation
 - `tools/windows/coverage.ps1` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 - `tools/linux/build.sh` configures and builds firmware plus host tests
+- `tools/linux/load.sh` builds the firmware and programs the ELF over a Raspberry Pi Debug Probe using OpenOCD; set `OPENOCD_EXE` or `PICO_DEBUG_PROBE_SPEED_KHZ` to override the default OpenOCD command or adapter speed
 - `tools/linux/test.sh` builds the firmware, rebuilds the host tests, and runs `ctest`
 - `tools/linux/coverage.sh` builds host tests with coverage instrumentation and writes reports under `build/coverage`
 
