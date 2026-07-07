@@ -3,7 +3,7 @@
 
 Examples:
   python tools/spi_tx.py --size-mb 1 --speed-mhz 8
-  python tools/spi_tx.py --size-mb 5 --speed-mhz 20 --chunk-bytes 4096
+    python tools/spi_tx.py --size-mb 5 --speed-mhz 20 --chunk-bytes 1048576
   python tools/spi_tx.py --sizes-mb 1,2,3,4,5 --speed-mhz 12 
 
 Requirements:
@@ -23,8 +23,9 @@ from dataclasses import asdict, dataclass
 
 
 BYTES_PER_MB = 1_000_000
-DEFAULT_CHUNK_BYTES = 4096
-VALID_SIZES_MB = (1, 2, 3, 4, 5)
+PATTERN_PERIOD_BYTES = 256
+DEFAULT_CHUNK_BYTES = 1024 * 1024
+VALID_SIZES_MB = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 
 
 @dataclass
@@ -76,6 +77,25 @@ def build_chunk(chunk_bytes: int, start_offset: int) -> bytearray:
     return bytearray((start_offset + index) & 0xFF for index in range(chunk_bytes))
 
 
+def build_transfer_window(chunk_bytes: int) -> bytearray:
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be greater than zero")
+
+    window_size = chunk_bytes + PATTERN_PERIOD_BYTES - 1
+    return bytearray(index & 0xFF for index in range(window_size))
+
+
+def get_fast_block_bytes(chunk_bytes: int) -> int:
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be greater than zero")
+
+    fast_block_bytes = chunk_bytes - (chunk_bytes % PATTERN_PERIOD_BYTES)
+    if fast_block_bytes == 0:
+        return chunk_bytes
+
+    return fast_block_bytes
+
+
 def open_spi(bus: int, device: int, speed_mhz: float):
     try:
         spidev = importlib.import_module("spidev")
@@ -102,14 +122,25 @@ def run_transfer(
 ) -> TransferResult:
     total_bytes = size_mb * BYTES_PER_MB
     spi = open_spi(bus, device, speed_mhz)
+    transfer_window = build_transfer_window(chunk_bytes)
+    fast_block_bytes = get_fast_block_bytes(chunk_bytes)
+    fast_block = None
+    if fast_block_bytes % PATTERN_PERIOD_BYTES == 0:
+        fast_block = memoryview(build_chunk(fast_block_bytes, 0))
 
     bytes_sent = 0
     start = time.monotonic()
     try:
         while bytes_sent < total_bytes:
             remaining = total_bytes - bytes_sent
+            if fast_block is not None and remaining >= fast_block_bytes:
+                spi.writebytes2(fast_block)
+                bytes_sent += fast_block_bytes
+                continue
+
             transfer_size = min(chunk_bytes, remaining)
-            spi.writebytes2(build_chunk(transfer_size, bytes_sent))
+            start_index = bytes_sent & 0xFF
+            spi.writebytes2(memoryview(transfer_window)[start_index:start_index + transfer_size])
             bytes_sent += transfer_size
     finally:
         spi.close()

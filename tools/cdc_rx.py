@@ -206,6 +206,9 @@ def main() -> int:
     )
 
     payload = asdict(result)
+    if result.expected_bytes is None:
+        del payload["expected_bytes"]
+        del payload["complete"]
     payload["elapsed_s"] = round(result.elapsed_s, 6)
     payload["bytes_per_s"] = round(result.bytes_per_s, 1)
     payload["mib_per_s"] = round(result.mib_per_s, 3)
